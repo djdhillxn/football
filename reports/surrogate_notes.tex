@@ -16,6 +16,13 @@ smoke configuration. Every run stores the resolved YAML, source commit, package 
 command, status, seed allocations, and artifact paths. A failed run retains its traceback and an
 emergency checkpoint when possible.
 
+The executed Phase 1 notebook completed, but pip reported conflicts with preinstalled Colab
+packages: Colab expected pandas 2.2.2, torchvision expected the runtime's Torch 2.11, and numba
+expected NumPy below 2.1, while the project environment installed pandas 2.3.3, Torch 2.7.1, and
+NumPy 2.2.6. None of those dependent packages is used by the present pipeline and all 30 tests
+passed, so this did not invalidate Phase 1. Eliminate or isolate the conflicts before the final
+multi-seed campaign to keep fresh-runtime reproduction predictable.
+
 \section{Detailed environment mechanics}
 The field is $9\,\mathrm{m}\times6\,\mathrm{m}$ with a $1.5\,\mathrm{m}$ goal. A macro decision is
 repeated for four $0.1\,\mathrm{s}$ low-level steps. The abstract model limits acceleration,
@@ -57,12 +64,12 @@ Time per macro step & $-0.005$ & Progress weight & 1.0 \\
 Possession weight & 0.2 & Support weight & 0.15 \\
 \bottomrule
 \end{tabular}
-Progress, possession, and support use $\gamma\Phi(s')-\Phi(s)$ components. Goal reward remains
-dominant.
+Progress, possession, and support use potential differences of the form
+$\gamma\Phi(s')-\Phi(s)$. Goal reward remains dominant.
 
 \section{Perturbation-profile definitions}
-Named profiles cover low/medium/high action delay; low/medium/high observation corruption;
-low/medium/high communication impairment; weak/strong kicks; low/high ball friction; slow/fast
+Named profiles cover low, medium, and high action delay; observation corruption at three levels;
+communication impairment at three levels; weak/strong kicks; low/high ball friction; slow/fast
 movement response; and combined moderate/severe conditions. Reset samples continuous values inside
 each YAML range and records both profile and realization. Family-level ablations filter names rather
 than changing simulator code.
@@ -88,22 +95,62 @@ respectively. Final runs must record every exact seed and must not reuse model-s
 final tests.
 
 \section{Experiment ledger}
-Edit this table as experiments are run. Do not copy smoke diagnostics into final rows.
-\begin{longtable}{lllllll}
+The following entries are Phase 1 diagnostics, not final comparative rows.
+\begingroup
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{longtable}{p{0.62in}p{0.78in}p{0.62in}p{1.15in}p{0.30in}p{1.55in}p{1.0in}}
 \toprule Date & Run name & Commit & Configuration & Seed & Outcome & Decision \\
 \midrule
-YYYY-MM-DD & pending & pending & pending & -- & not run & -- \\
+2026-07-21 & smoke test & 3937e9e & smoke test & 0 & complete; artifacts and API path valid & infrastructure only \\
+2026-07-21 & baselines & 3937e9e & base; 100 each & 0 & abstract 0.06--0.30; Pymunk 0.73--0.76 & block Phase 2 \\
+2026-07-21 & IPPO nominal & 3937e9e & IPPO; 2.0M steps & 0 & learned intercept; transfer non-discriminative & retain; repair benchmark \\
 \bottomrule
 \end{longtable}
+\endgroup
 
 \section{Hyperparameter attempts}
 Record each deviation from the checked-in defaults, the validation evidence motivating it, and
-whether the choice was made before final-test evaluation. No attempts are recorded at repository
-creation time.
+whether the choice was made before final-test evaluation. The Phase 1 nominal IPPO run used the
+checked-in defaults; no post-test hyperparameter selection was performed. Its selected checkpoint
+occurred at 1,810,432 environment steps with validation success 0.825 over 40 fixed validation
+episodes. The final checkpoint at 2,007,040 steps scored 0.750 on the same-size validation batch,
+so the selection rule correctly retained the earlier checkpoint.
 
 \section{Failed runs and debugging notes}
-Failed run metadata and logs are primary records. Add concise diagnoses here after inspecting those
-artifacts. Do not erase failed directories merely to simplify the manifest.
+All three restored Phase 1 run records have status \texttt{complete} and no failure exception. A
+completed process is not necessarily a valid experiment; the following audit findings block the
+Phase 2 launch.
+\begin{enumerate}
+\item \textbf{Pymunk benchmark saturation.} Random, double-chase, role-based, and nominal-IPPO
+success rates are 0.760, 0.730, 0.740, and 0.730. Random and IPPO used the same seeds
+40,000--40,099; their paired outcome counts are 58 both-success, 9 both-failure, 15 IPPO-only, and
+18 random-only (two-sided exact paired $p=0.728$). The learned actor is therefore not distinguished
+from random behavior by the current transfer suite.
+\item \textbf{Boundary mismatch.} Abstract baseline out-of-bounds rates are 0.54--0.85, but Pymunk
+rates are 0.00--0.01. The abstract simulator terminates a ball beyond the sideline while Pymunk
+uses reflective walls. Player bodies can also escape through goal openings; this occurs in the
+recorded trajectories. Align or explicitly calibrate these semantics before interpreting a
+cross-simulator gap.
+\item \textbf{Metric range violation.} Possession is incremented at every physics substep and
+divided by macro-action steps. With four repeats it can exceed 1.0 (the observed episode maximum is
+3.864). Normalize by executed substeps or count once per macro step, add range assertions, and
+regenerate summaries.
+\item \textbf{Misnamed minimum.} The standard evaluation has only the nominal profile. Grouping by
+profile makes its reported minimum-profile success 0.453, although the minimum across defender
+modes is 0.060. Report the defender-mode minimum separately and reserve profile minima for a
+profile suite.
+\item \textbf{Weak behavioral anchors.} The role-based abstract heuristic succeeds in only 0.060
+of episodes and exits out of bounds in 0.85, worse than random success 0.110. The learned policy
+makes zero valid pass attempts in 400 final-evaluation episodes and has invalid-action fractions
+0.237 on nominal abstract intercept and 0.558 in Pymunk. Inspect action validity and role behavior
+before treating goal rate as evidence of cooperative skill use.
+\end{enumerate}
+
+The IPPO optimization trace itself is healthy: all recorded scalar diagnostics are finite, mean
+training success rises from 0.061 over the first 25 updates to 0.769 over the last 25, and nominal
+intercept test success is 0.840 over 100 episodes. Preserve the best checkpoint. Do not spend
+accelerator time on another long run until the evaluation defects above are repaired.
 
 \section{Discarded ideas}
 Version one intentionally excludes image observations, joint-level locomotion learning, full 5v5
@@ -119,7 +166,25 @@ before changing that status.
 \section{Known limitations}
 Skill adapters encode task knowledge; the defender is scripted; synchronous collection may limit
 throughput; feed-forward actors infer delay only through short observation history; Pymunk remains
-a simple planar world; and robustness profiles cannot span unmodeled hardware failures.
+a simple planar world; and robustness profiles cannot span unmodeled hardware failures. The Phase
+1 checkpoint adds observed limitations: opponent-mode generalization is poor (0.060 against
+chase-ball versus 0.840 against the trained intercept defender), no passing behavior was observed,
+and the current Pymunk protocol is too permissive to measure policy quality.
+
+\section{Phase 2 entry gate}
+Phase 2 is a no-go until all of the following are satisfied.
+\begin{itemize}
+\item Correct possession normalization and defender/profile aggregation, with tests asserting
+bounded fractions and the intended grouping.
+\item Make abstract and Pymunk boundary/termination choices comparable or document and calibrate a
+deliberate difference; keep every player in a valid playable region.
+\item Rerun 100 episodes per scripted method in both simulators and confirm that Pymunk outcomes
+separate meaningful behavior from random action selection.
+\item Re-evaluate the frozen Phase 1 best IPPO checkpoint on the corrected abstract and Pymunk
+suites. Retrain only if abstract dynamics change or nominal learning fails to reproduce.
+\item Inspect representative successes and failures and confirm that outcome labels match the
+rendered trajectories.
+\end{itemize}
 
 \section{Future physical-robot deployment plan}
 First validate TorchScript observation parity in a supervised simulator. Then integrate a tested
@@ -138,4 +203,3 @@ tests. A successful deployment requires logged physical trials, not merely contr
 \item Describe Pymunk as sim-to-sim and do not infer physical-robot performance.
 \end{itemize}
 \end{document}
-

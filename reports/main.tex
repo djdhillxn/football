@@ -18,8 +18,9 @@ learning in a two-attacker robot-soccer task. Policies train in a fast abstract 
 frozen before zero-shot evaluation in an independently implemented Pymunk rigid-body simulator.
 The proposed curriculum directs domain randomization toward perturbation profiles on which the
 current policy fails. Pymunk transfer is sim-to-sim evaluation and a controlled proxy for selected
-sim-to-real robustness questions, not physical deployment. Final performance claims are deferred
-until the registered experiment artifacts are generated.
+sim-to-real robustness questions, not physical deployment. A Phase 1 audit found clear nominal
+IPPO learning but also a saturated Pymunk baseline and metric defects. The comparative Phase 2
+study is therefore deferred until those validity problems are corrected and re-evaluated.
 \end{abstract}
 
 \section{Introduction and motivation}
@@ -121,9 +122,77 @@ potential-based progress, possession, and support shaping.
 \begin{center}
 \fcolorbox{black}{gray!10}{\parbox{0.88\linewidth}{\centering\ResultsStatus}}
 \end{center}
-No value is inserted manually. The comparison command replaces the generated file only from
-completed run and evaluation artifacts. Smoke-run observations are infrastructure diagnostics and
-must not be interpreted as final evidence.
+
+\subsection{Phase 1 checkpoint audit}
+The restored artifacts were produced on 21 July 2026 at commit \texttt{3937e9e}. The IPPO run completed
+2,007,040 abstract-simulator steps with no non-finite loss or gradient recorded. Mean training
+success increased from 0.061 over the first 25 updates to 0.769 over the last 25. The selected
+checkpoint was saved at 1,810,432 steps, where a 40-episode validation set reached 0.825 success.
+These are credible signs that the implementation can optimize the nominal training task, but they
+are one-seed diagnostics rather than comparative evidence.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{lllrrr}
+\toprule
+Method & Simulator & Defender scope & Episodes & Success & Mean return \\
+\midrule
+Random & abstract & intercept & 100 & 0.110 & $-3.876$ \\
+Double chase & abstract & intercept & 100 & 0.300 & $-1.956$ \\
+Role based & abstract & intercept & 100 & 0.060 & $-1.667$ \\
+Nominal IPPO & abstract & all three & 300 & 0.453 & 2.337 \\
+Nominal IPPO & abstract & intercept & 100 & 0.840 & 7.469 \\
+Nominal IPPO & abstract & stationary goalie & 100 & 0.460 & 2.349 \\
+Nominal IPPO & abstract & chase ball & 100 & 0.060 & $-2.807$ \\
+Random & Pymunk & intercept & 100 & 0.760 & $-0.266$ \\
+Double chase & Pymunk & intercept & 100 & 0.730 & 5.129 \\
+Role based & Pymunk & intercept & 100 & 0.740 & 5.652 \\
+Nominal IPPO & Pymunk & intercept & 100 & 0.730 & 4.668 \\
+\bottomrule
+\end{tabular}
+\caption{Observed Phase 1 outcomes from completed artifacts. ``All three'' averages equal-sized
+stationary-goalie, chase-ball, and intercept subsets and should not be compared directly with a
+single-defender baseline.}
+\label{tab:phase1-checkpoint}
+\end{table}
+
+The nominal policy solves its trained intercept opponent substantially more often than the
+heuristics, but it does not yet demonstrate broad opponent robustness: success falls to 0.060
+against the chase-ball defender and 0.460 against the stationary goalie. Across the 300 abstract
+and 100 Pymunk learned-policy test episodes, it makes no valid pass attempt; consequently Phase 1
+does not yet provide evidence that its success depends on learned passing cooperation.
+
+The Pymunk result cannot currently support a transfer claim. On the same seeds 40,000--40,099,
+nominal IPPO succeeds in 73 episodes and the random policy in 76. They agree on 58 successes and
+9 failures; IPPO alone succeeds on 15 and random alone on 18. An exact paired test on the 33
+discordant seeds gives $p=0.728$, so this evaluation does not distinguish the learned actor from
+random action selection. All four Pymunk methods lie between 0.730 and 0.760 success. Moreover,
+abstract baselines terminate out of bounds in 54--85\% of episodes, whereas the corresponding
+Pymunk rates are 0--1\%. The simulator implementations use materially different sideline and wall
+semantics, and recorded Pymunk trajectories show attackers escaping through goal openings. These
+facts make the reported 0.11 intercept transfer gap non-diagnostic.
+
+Two instrumentation defects also prevent secondary-metric interpretation. Possession is counted
+on each of four physics substeps but divided by macro steps, yielding impossible reported fractions
+above one. In the standard suite, ``minimum profile success'' groups only the constant nominal
+profile and therefore reports the overall 0.453 rather than the actual minimum defender-mode
+success of 0.060. These fields must be corrected and regenerated before use.
+
+\subsection{Phase 2 launch decision}
+The decision is \textbf{no-go}. No additional long training should be launched yet. First align or
+explicitly calibrate terminal and boundary semantics in the two simulators; prevent players from
+leaving the playable field; repair possession normalization and defender-mode minima; and make the
+role-based heuristic a credible anchor rather than the weakest abstract baseline. Then rerun the
+100-episode scripted baselines and re-evaluate the existing frozen best IPPO checkpoint. Retraining
+IPPO is necessary only if a correction changes the abstract training dynamics or the corrected
+nominal abstract evaluation no longer reproduces learning. Phase 2 may start when Pymunk success is
+meaningfully policy-sensitive, all bounded metrics respect their ranges, and the nominal checkpoint
+still clearly exceeds scripted controls on the trained abstract task.
+
+The comparison command should replace generated content only from completed, validated artifacts.
+Smoke-run observations remain infrastructure diagnostics and must not be interpreted as final
+evidence.
 
 \IfFileExists{reports/figures/method_success_comparison.png}{
 \begin{figure}[t]\centering
@@ -136,7 +205,11 @@ The video workflow records nominal, transfer, and forced-profile trajectories wi
 outcome overlays. Analysis should distinguish coordination failures (role oscillation, redundant
 chasing, poor support), control failures (delay and movement response), perception/communication
 failures, and contact-model failures. Representative successes and failures will be selected only
-after the fixed-seed evaluation completes.
+after the fixed-seed evaluation completes. The Phase 1 videos already show a largely direct
+approach-and-shoot strategy, repeated crowding near the ball, two of three abstract video seeds
+ending out of bounds, and one Pymunk seed ending with a stationary ball after players leave the
+visible playing area. These observations are diagnostic leads, not a representative behavioral
+rate estimate.
 
 \section{Limitations and claim boundaries}
 The task omits images, recurrent memory, joint-level locomotion, self-play, learned opponents, and
@@ -146,12 +219,13 @@ is multi-fidelity and sim-to-real-oriented; it cannot establish physical transfe
 
 \section{Conclusion}
 The repository supplies an auditable experiment for asking whether adaptive, failure-directed
-variation improves cooperative policy robustness across simulator implementations. Conclusions
-about comparative performance remain pending the planned multi-seed artifact set. A later Webots
-or robot phase should be attempted only after the simulator protocol is reproduced and a complete
-perception, localization, locomotion, and safety stack is available.
+variation improves cooperative policy robustness across simulator implementations. Phase 1 shows
+that nominal IPPO can learn the trained abstract task, but it also shows that the present Pymunk
+benchmark and metric implementation are not ready to adjudicate transfer. Comparative conclusions
+remain pending both the corrective Phase 1 re-evaluation and the planned multi-seed Phase 2 set. A
+later Webots or robot phase should be attempted only after the simulator protocol is reproduced and
+a complete perception, localization, locomotion, and safety stack is available.
 
 \bibliographystyle{plain}
 \bibliography{reports/references}
 \end{document}
-
