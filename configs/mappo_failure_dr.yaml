@@ -1,0 +1,6 @@
+inherits: base.yaml
+experiment:
+  name: mappo_failure_dr
+randomization:
+  mode: failure_directed
+

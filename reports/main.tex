@@ -1,0 +1,157 @@
+\documentclass[10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\title{Failure-Directed Domain Randomization for Cooperative Robot-Soccer Skill Selection}
+\author{Research software report}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present a compact multi-fidelity testbed for parameter-shared multi-agent reinforcement
+learning in a two-attacker robot-soccer task. Policies train in a fast abstract simulator and are
+frozen before zero-shot evaluation in an independently implemented Pymunk rigid-body simulator.
+The proposed curriculum directs domain randomization toward perturbation profiles on which the
+current policy fails. Pymunk transfer is sim-to-sim evaluation and a controlled proxy for selected
+sim-to-real robustness questions, not physical deployment. Final performance claims are deferred
+until the registered experiment artifacts are generated.
+\end{abstract}
+
+\section{Introduction and motivation}
+Robot soccer combines partial observability, delayed control, contact dynamics, communication
+failure, and cooperation. End-to-end physical training is expensive, while conclusions drawn from
+one simulator can be brittle. We therefore ask whether a decentralized, cooperative skill policy
+learned in a deliberately simple simulator survives a change in simulator fidelity and unseen
+perturbations. The contribution is a failure-directed curriculum that spends training episodes on
+the policy's empirically weakest named perturbation profiles.
+
+\section{RoboCup and robot-soccer context}
+RoboCup established robot soccer as a long-horizon benchmark joining perception, control, and
+multi-agent reasoning \cite{kitano1997robocup}. Modern learned soccer controllers demonstrate the
+value of reinforcement learning for dynamic bipedal play \cite{haarnoja2023soccer}. Our scope is
+narrower: high-level behavior selection for two abstract attackers, assuming lower-level motion
+and perception stacks.
+
+\section{Related work}
+PPO uses a clipped surrogate objective to stabilize on-policy updates
+\cite{schulman2017ppo}. MAPPO showed that careful centralized-value training can be effective in
+cooperative multi-agent tasks \cite{yu2022mappo}; this repository uses centralized training with
+decentralized execution. Domain randomization varies simulator parameters to improve transfer
+\cite{tobin2017domain}, while automatic curricula adapt the distribution as learning proceeds
+\cite{openai2019rubik}. The present method uses explicit, interpretable failure profiles rather
+than an unstructured Cartesian parameter distribution. Cross-fidelity evaluation follows the
+broader motivation of using simulation variation to reveal model-specific policy behavior.
+
+\section{Problem formulation}
+We model the task as a cooperative partially observable stochastic game
+$\langle\mathcal{S},\{\mathcal{O}_i\},\{\mathcal{A}_i\},P,r,\gamma\rangle$.
+Two agents receive distinct egocentric observations $o_i$, select discrete skills through one
+shared policy $\pi_\theta(a_i\mid o_i)$, and receive one team reward. During MAPPO training only, a
+critic $V_\phi(s)$ observes the true joint state. The actor remains decentralized at evaluation.
+
+\section{Abstract simulator}
+The training simulator explicitly integrates bounded acceleration, speed, turn rate, ball drag,
+collisions, boundary and goal events, kick impulses, a delayed-action queue, perception queues, and
+imperfect teammate messages. Each policy step repeats a selected macro-action for four low-level
+steps. The scripted defender can guard, chase, or predict an interception point and clears the ball
+through ordinary limited motion rather than teleportation.
+
+\section{Pymunk transfer simulator}
+The transfer environment rebuilds players, ball, walls, and goal openings as Pymunk rigid bodies.
+Velocity targets are realized by bounded forces and torque; kicks are impulses delivered at
+contact range. Inertia, collision response, damping, integration substeps, and reaction delay
+differ unavoidably from the abstract equations. Observation, action, reward, and metric interfaces
+remain fixed, so the TorchScript actor transfers unchanged. This is zero-shot cross-simulator
+transfer, not completed physical sim-to-real deployment.
+
+\section{Observation and action design}
+Each 61-dimensional local vector contains self motion and action state, delayed ball history,
+egocentric goalposts and boundaries, teammate kinematics and stale message state, defender state,
+confidence flags, and identity. The seven actions are approach, left/right dribble, shoot, pass,
+move to support, and hold/face ball. Noise affects perceived state only; true dynamics and
+centralized state remain separate.
+
+\section{IPPO and MAPPO}
+Both algorithms use one categorical actor. IPPO shares a local value network and computes one
+advantage per local trajectory. MAPPO uses one centralized team value per environment step and
+broadcasts the team advantage to the two actor samples; its value loss is counted once. GAE
+bootstraps through time-limit truncation but does not propagate across a reset. Separate Adam
+optimizers, clipped policy and value objectives, entropy regularization, gradient clipping,
+target-KL stopping, and linear learning-rate decay follow standard PPO practice.
+
+\section{Failure-directed domain randomization}
+Let $f_i$ be a smoothed failure rate for profile $i$. After warm-up, deterministic validation on
+disjoint seeds updates
+\begin{align}
+ w_i &= (\epsilon + f_i)^\alpha,\\
+ \tilde p_i &= (1-\beta)\frac{w_i}{\sum_j w_j}+\frac{\beta}{N}.
+\end{align}
+The distribution is projected onto the simplex with a hard maximum profile probability. The
+uniform mixture preserves exploration; the cap prevents one persistent failure from consuming all
+training. Curriculum evaluation never updates observation normalization.
+
+\section{Experimental protocol}
+Training, ordinary validation, curriculum validation, abstract test, Pymunk transfer, and video
+seeds occupy disjoint ranges. Policies are selected on fixed abstract validation seeds, frozen,
+then evaluated on nominal defenders, all profiles, and an action-delay by localization-noise grid.
+Multiple training seeds are aggregated by experiment name. Checkpoints include all optimizer,
+normalizer, RNG, schedule, and curriculum state needed to resume.
+
+\section{Baselines and ablations}
+The matrix includes random, double-chase, and hysteretic role-based heuristics; nominal IPPO;
+nominal MAPPO; uniformly randomized MAPPO; and failure-directed MAPPO. Focused ablations remove
+action-delay, communication, or observation-noise profile families while retaining the same code
+path and configuration inheritance.
+
+\section{Metrics}
+Primary measures are goal success, return, time to score, and the abstract-to-Pymunk success gap.
+Secondary measures include pass completion, possession, redundant chasing, collisions, invalid
+skills, action switches, worst-decile return, CVaR, per-profile minima, normalized robustness area,
+and bootstrap intervals. Reward-component logs distinguish sparse task reward from small
+potential-based progress, possession, and support shaping.
+
+\section{Results}
+\IfFileExists{reports/generated_results.tex}{\input{reports/generated_results.tex}}{
+  \newcommand{\ResultsStatus}{Final empirical results have not yet been generated.}}
+\begin{center}
+\fcolorbox{black}{gray!10}{\parbox{0.88\linewidth}{\centering\ResultsStatus}}
+\end{center}
+No value is inserted manually. The comparison command replaces the generated file only from
+completed run and evaluation artifacts. Smoke-run observations are infrastructure diagnostics and
+must not be interpreted as final evidence.
+
+\IfFileExists{reports/figures/method_success_comparison.png}{
+\begin{figure}[t]\centering
+\includegraphics[width=0.78\linewidth]{reports/figures/method_success_comparison.png}
+\caption{Observed method comparison generated from registered artifacts.}
+\end{figure}}{}
+
+\section{Qualitative behavior and failure analysis}
+The video workflow records nominal, transfer, and forced-profile trajectories with action and
+outcome overlays. Analysis should distinguish coordination failures (role oscillation, redundant
+chasing, poor support), control failures (delay and movement response), perception/communication
+failures, and contact-model failures. Representative successes and failures will be selected only
+after the fixed-seed evaluation completes.
+
+\section{Limitations and claim boundaries}
+The task omits images, recurrent memory, joint-level locomotion, self-play, learned opponents, and
+full-team tactics. The scripted skill adapters still encode useful soccer structure. Pymunk does
+not model sensing, compliance, actuator limits, falls, or hardware damage. Consequently the study
+is multi-fidelity and sim-to-real-oriented; it cannot establish physical transfer or safety.
+
+\section{Conclusion}
+The repository supplies an auditable experiment for asking whether adaptive, failure-directed
+variation improves cooperative policy robustness across simulator implementations. Conclusions
+about comparative performance remain pending the planned multi-seed artifact set. A later Webots
+or robot phase should be attempted only after the simulator protocol is reproduced and a complete
+perception, localization, locomotion, and safety stack is available.
+
+\bibliographystyle{plain}
+\bibliography{reports/references}
+\end{document}
+

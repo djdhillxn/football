@@ -1,0 +1,278 @@
+experiment:
+  name: base
+  output_dir: runs
+  seed: 0
+  tensorboard: true
+  deterministic_torch: false
+
+environment:
+  simulator: abstract
+  field_length: 9.0
+  field_width: 6.0
+  goal_width: 1.5
+  dt: 0.1
+  macro_action_repeat: 4
+  max_episode_steps: 250
+  stationary_truncation_steps: 45
+  failure_boundary: -4.7
+  player_radius: 0.20
+  ball_radius: 0.10
+  player_max_speed: 1.2
+  player_acceleration: 3.0
+  player_max_turn_rate: 3.0
+  ball_drag: 0.45
+  ball_restitution: 0.72
+  kick_radius: 0.38
+  kick_angle_tolerance: 1.20
+  shoot_speed: 4.5
+  pass_speed: 3.0
+  dribble_impulse: 0.26
+  support_separation: 1.4
+  redundant_chase_distance: 1.5
+  maximum_delay_steps: 8
+
+transfer_environment:
+  substeps: 5
+  player_mass: 5.0
+  ball_mass: 0.43
+  player_friction: 0.65
+  ball_friction: 0.42
+  wall_elasticity: 0.78
+  velocity_control_gain: 8.0
+  changed_reaction_delay_steps: 1
+
+reward:
+  goal: 10.0
+  defender_clear: -3.0
+  out_of_bounds: -3.0
+  timeout: -1.0
+  successful_pass: 0.5
+  lost_pass: -0.1
+  invalid_action: -0.01
+  collision: -0.03
+  time_penalty: -0.005
+  progress_weight: 1.0
+  possession_weight: 0.2
+  support_weight: 0.15
+
+opponent:
+  mode: intercept
+  max_speed: 1.0
+  acceleration: 2.4
+  max_turn_rate: 2.5
+  reaction_delay_steps: 2
+  control_radius: 0.38
+  clear_speed: 3.2
+
+observations:
+  history_length: 3
+  normalize: true
+  clip: 10.0
+  expose_perturbations_to_critic: false
+  reward_normalize: false
+
+randomization:
+  mode: none
+  nominal_probability: 0.1
+  disabled_families: []
+  training_profiles: null
+  # Each pair is a closed uniform range sampled once per episode.
+  profiles:
+    nominal:
+      family: nominal
+      parameters: {}
+    action_delay_low:
+      family: action_delay
+      parameters: {action_latency: [1, 1]}
+    action_delay_medium:
+      family: action_delay
+      parameters: {action_latency: [2, 3]}
+    action_delay_high:
+      family: action_delay
+      parameters: {action_latency: [4, 5]}
+    observation_noise_low:
+      family: observation_noise
+      parameters:
+        localization_noise: [0.01, 0.025]
+        heading_noise: [0.01, 0.03]
+        ball_observation_noise: [0.015, 0.03]
+        teammate_position_noise: [0.01, 0.025]
+        defender_position_noise: [0.01, 0.025]
+    observation_noise_medium:
+      family: observation_noise
+      parameters:
+        observation_latency: [1, 2]
+        localization_noise: [0.03, 0.07]
+        heading_noise: [0.03, 0.08]
+        ball_observation_noise: [0.04, 0.08]
+        teammate_position_noise: [0.03, 0.08]
+        defender_position_noise: [0.03, 0.08]
+        missed_ball_probability: [0.02, 0.08]
+    observation_noise_high:
+      family: observation_noise
+      parameters:
+        observation_latency: [2, 4]
+        localization_noise: [0.08, 0.15]
+        heading_noise: [0.08, 0.18]
+        ball_observation_noise: [0.10, 0.20]
+        teammate_position_noise: [0.08, 0.16]
+        defender_position_noise: [0.08, 0.16]
+        missed_ball_probability: [0.10, 0.25]
+        missed_teammate_probability: [0.08, 0.22]
+        missed_defender_probability: [0.05, 0.20]
+    communication_low:
+      family: communication
+      parameters:
+        communication_latency: [1, 1]
+        packet_loss: [0.02, 0.08]
+    communication_medium:
+      family: communication
+      parameters:
+        communication_latency: [2, 3]
+        packet_loss: [0.12, 0.30]
+        missed_teammate_probability: [0.03, 0.10]
+    communication_high:
+      family: communication
+      parameters:
+        communication_latency: [3, 5]
+        packet_loss: [0.35, 0.65]
+        missed_teammate_probability: [0.15, 0.35]
+    kick_weak:
+      family: kick
+      parameters:
+        kick_strength_multiplier: [0.60, 0.82]
+        kick_direction_noise: [0.03, 0.10]
+    kick_strong:
+      family: kick
+      parameters:
+        kick_strength_multiplier: [1.15, 1.35]
+        kick_direction_noise: [0.04, 0.12]
+    ball_friction_low:
+      family: ball
+      parameters:
+        ball_drag_multiplier: [0.45, 0.70]
+        ball_restitution: [0.78, 0.90]
+        ball_mass_multiplier: [0.82, 1.02]
+    ball_friction_high:
+      family: ball
+      parameters:
+        ball_drag_multiplier: [1.35, 1.80]
+        ball_restitution: [0.45, 0.65]
+        ball_mass_multiplier: [1.00, 1.25]
+    movement_slow:
+      family: movement
+      parameters:
+        speed_multiplier: [0.68, 0.86]
+        angular_speed_multiplier: [0.72, 0.90]
+        acceleration_multiplier: [0.60, 0.82]
+    movement_fast:
+      family: movement
+      parameters:
+        speed_multiplier: [1.10, 1.28]
+        angular_speed_multiplier: [1.05, 1.25]
+        acceleration_multiplier: [1.08, 1.30]
+    combined_moderate:
+      family: combined
+      parameters:
+        action_latency: [1, 2]
+        observation_latency: [1, 2]
+        communication_latency: [1, 2]
+        packet_loss: [0.10, 0.25]
+        localization_noise: [0.03, 0.08]
+        ball_observation_noise: [0.04, 0.10]
+        teammate_position_noise: [0.03, 0.09]
+        defender_position_noise: [0.03, 0.09]
+        speed_multiplier: [0.80, 1.10]
+        kick_strength_multiplier: [0.80, 1.18]
+        kick_direction_noise: [0.03, 0.10]
+        defender_reaction_delay: [1, 4]
+        defender_speed_multiplier: [0.85, 1.15]
+    combined_severe:
+      family: combined
+      parameters:
+        action_latency: [2, 4]
+        observation_latency: [2, 4]
+        communication_latency: [2, 5]
+        packet_loss: [0.30, 0.60]
+        localization_noise: [0.08, 0.16]
+        heading_noise: [0.07, 0.16]
+        ball_observation_noise: [0.10, 0.22]
+        teammate_position_noise: [0.08, 0.18]
+        defender_position_noise: [0.08, 0.18]
+        missed_ball_probability: [0.08, 0.22]
+        speed_multiplier: [0.68, 0.88]
+        acceleration_multiplier: [0.62, 0.82]
+        kick_strength_multiplier: [0.65, 1.30]
+        kick_direction_noise: [0.08, 0.18]
+        ball_drag_multiplier: [0.65, 1.65]
+        defender_reaction_delay: [1, 5]
+        defender_speed_multiplier: [0.90, 1.25]
+
+curriculum:
+  warmup_updates: 10
+  evaluation_interval_updates: 20
+  episodes_per_profile: 5
+  ema_decay: 0.5
+  epsilon: 0.05
+  alpha: 1.0
+  uniform_mixture_beta: 0.10
+  maximum_profile_probability: 0.25
+
+model:
+  actor_hidden_sizes: [128, 128]
+  local_critic_hidden_sizes: [128, 128]
+  central_critic_hidden_sizes: [256, 256]
+  activation: tanh
+  orthogonal_init: true
+
+ppo:
+  algorithm: mappo
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  value_clip_range: 0.2
+  actor_learning_rate: 0.0003
+  critic_learning_rate: 0.0003
+  update_epochs: 5
+  actor_minibatch_size: 4096
+  critic_minibatch_size: 2048
+  entropy_coefficient: 0.01
+  value_coefficient: 0.5
+  max_gradient_norm: 0.5
+  target_kl: 0.03
+  linear_learning_rate_decay: true
+
+train:
+  total_steps: 2000000
+  num_envs: 32
+  rollout_steps: 256
+  checkpoint_frequency_steps: 200000
+  validation_frequency_steps: 100000
+  validation_episodes: 40
+  progress_bar: true
+  device: auto
+
+evaluation:
+  episodes: 100
+  deterministic: true
+  profile_episodes: 50
+  robustness_episodes_per_cell: 20
+  bootstrap_samples: 1000
+  action_delay_grid: [0, 1, 2, 3, 4]
+  position_noise_grid: [0.0, 0.02, 0.05, 0.10, 0.15]
+  seed_bases:
+    validation: 10000
+    curriculum: 20000
+    abstract_test: 30000
+    transfer_test: 40000
+    video: 50000
+
+video:
+  width: 1280
+  height: 720
+  fps: 15
+  episodes: 3
+
+logging:
+  console_level: INFO
+  file_level: DEBUG

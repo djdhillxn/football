@@ -1,0 +1,8 @@
+inherits: base.yaml
+experiment:
+  name: mappo_nominal
+ppo:
+  algorithm: mappo
+randomization:
+  mode: none
+

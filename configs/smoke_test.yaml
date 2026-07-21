@@ -1,0 +1,33 @@
+inherits: base.yaml
+experiment:
+  name: smoke_test
+  tensorboard: false
+randomization:
+  mode: failure_directed
+  training_profiles: [action_delay_medium, observation_noise_medium, combined_moderate]
+curriculum:
+  warmup_updates: 1
+  evaluation_interval_updates: 2
+  episodes_per_profile: 1
+  maximum_profile_probability: 0.5
+train:
+  total_steps: 1024
+  num_envs: 4
+  rollout_steps: 64
+  checkpoint_frequency_steps: 512
+  validation_frequency_steps: 512
+  validation_episodes: 5
+ppo:
+  update_epochs: 2
+  actor_minibatch_size: 256
+  critic_minibatch_size: 128
+evaluation:
+  episodes: 5
+  profile_episodes: 1
+  robustness_episodes_per_cell: 1
+  bootstrap_samples: 100
+video:
+  width: 640
+  height: 360
+  fps: 12
+  episodes: 1

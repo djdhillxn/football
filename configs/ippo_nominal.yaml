@@ -1,0 +1,8 @@
+inherits: base.yaml
+experiment:
+  name: ippo_nominal
+ppo:
+  algorithm: ippo
+randomization:
+  mode: none
+

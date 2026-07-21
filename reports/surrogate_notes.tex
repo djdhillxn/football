@@ -1,0 +1,141 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage[hidelinks]{hyperref}
+\title{Robot-Soccer Transfer: Technical and Experimental Record}
+\author{Manually maintained surrogate report}
+\date{\today}
+\begin{document}
+\maketitle
+
+\section{Repository and runtime setup}
+Use Python 3.10--3.13, install the pinned editable project, run Ruff and pytest, then execute the
+smoke configuration. Every run stores the resolved YAML, source commit, package versions, device,
+command, status, seed allocations, and artifact paths. A failed run retains its traceback and an
+emergency checkpoint when possible.
+
+\section{Detailed environment mechanics}
+The field is $9\,\mathrm{m}\times6\,\mathrm{m}$ with a $1.5\,\mathrm{m}$ goal. A macro decision is
+repeated for four $0.1\,\mathrm{s}$ low-level steps. The abstract model limits acceleration,
+translation, and turn rate; applies linear ball drag; resolves circular contacts; and delivers kick
+velocity only inside range and angle tolerances. The transfer model independently creates Pymunk
+bodies, force controllers, collision shapes, walls with goal openings, damping, friction,
+elasticity, and impulse kicks over multiple integration substeps.
+
+Observation and action delay queues are bounded. Object misses set confidence to zero without
+changing truth. Packet loss preserves the previous delivered teammate action and increments its
+age. The intercept defender protects goal center for a distant ball, tracks a delayed predicted
+intercept when threatened, and clears only inside control range.
+
+\section{Full configuration tables}
+\begin{longtable}{lll}
+\toprule Group & Representative field & Default \\
+\midrule
+Environment & field / goal & $9.0\times6.0$ m / 1.5 m \\
+Environment & policy step & $4\times0.1$ s \\
+Environment & episode limit & 250 macro steps \\
+Actor & hidden layers & 128, 128 Tanh \\
+Local critic & hidden layers & 128, 128 Tanh \\
+Central critic & hidden layers & 256, 256 Tanh \\
+PPO & $\gamma,\lambda$, clip & 0.99, 0.95, 0.20 \\
+PPO & actor/critic learning rate & $3\times10^{-4}$ \\
+PPO & epochs / target KL & 5 / 0.03 \\
+Training & environments / rollout & 32 / 256 \\
+\bottomrule
+\end{longtable}
+The resolved YAML in each run is authoritative; this table is a readable index, not a replacement.
+
+\section{Reward coefficients}
+\begin{tabular}{lr@{\qquad}lr}
+\toprule Goal & 10.0 & Defender clear & $-3.0$ \\
+Out of bounds & $-3.0$ & Timeout & $-1.0$ \\
+Completed pass & 0.5 & Lost/intercepted pass & $-0.1$ \\
+Invalid kick/pass & $-0.01$ & Attacker collision & $-0.03$ \\
+Time per macro step & $-0.005$ & Progress weight & 1.0 \\
+Possession weight & 0.2 & Support weight & 0.15 \\
+\bottomrule
+\end{tabular}
+Progress, possession, and support use $\gamma\Phi(s')-\Phi(s)$ components. Goal reward remains
+dominant.
+
+\section{Perturbation-profile definitions}
+Named profiles cover low/medium/high action delay; low/medium/high observation corruption;
+low/medium/high communication impairment; weak/strong kicks; low/high ball friction; slow/fast
+movement response; and combined moderate/severe conditions. Reset samples continuous values inside
+each YAML range and records both profile and realization. Family-level ablations filter names rather
+than changing simulator code.
+
+\section{Curriculum-update derivation}
+For success $q_i$, failure $1-q_i$ enters an EMA
+$f_i\leftarrow d f_i+(1-d)(1-q_i)$. Weights $(\epsilon+f_i)^\alpha$ are normalized, mixed with
+$\beta/N$, then projected onto the capped simplex. Defaults are $d=0.5$, $\epsilon=0.05$,
+$\alpha=1$, $\beta=0.1$, and cap 0.25. Curriculum seeds begin at 20,000 and do not update running
+normalizers.
+
+\section{PPO implementation notes}
+Rollouts are stored as time, environment, agent, feature arrays. MAPPO has one value and one GAE
+advantage per environment transition; actor training broadcasts that advantage, while critic
+training does not duplicate it. IPPO flattens local value samples across both agents. Truncations
+bootstrap from the final observation but stop the recursive advantage chain across reset. Loss and
+gradient finiteness is mandatory; a NaN raises after an emergency checkpoint attempt.
+
+\section{Seed allocation}
+Training begins at the experiment seed. Ordinary validation, curriculum validation, abstract final
+test, Pymunk transfer, and video scenarios begin at 10,000, 20,000, 30,000, 40,000, and 50,000
+respectively. Final runs must record every exact seed and must not reuse model-selection outcomes as
+final tests.
+
+\section{Experiment ledger}
+Edit this table as experiments are run. Do not copy smoke diagnostics into final rows.
+\begin{longtable}{lllllll}
+\toprule Date & Run name & Commit & Configuration & Seed & Outcome & Decision \\
+\midrule
+YYYY-MM-DD & pending & pending & pending & -- & not run & -- \\
+\bottomrule
+\end{longtable}
+
+\section{Hyperparameter attempts}
+Record each deviation from the checked-in defaults, the validation evidence motivating it, and
+whether the choice was made before final-test evaluation. No attempts are recorded at repository
+creation time.
+
+\section{Failed runs and debugging notes}
+Failed run metadata and logs are primary records. Add concise diagnoses here after inspecting those
+artifacts. Do not erase failed directories merely to simplify the manifest.
+
+\section{Discarded ideas}
+Version one intentionally excludes image observations, joint-level locomotion learning, full 5v5
+play, self-play, learned opponents, RNNs, ROS, and physical-deployment claims. Each would add an
+independent source of variance or infrastructure before the cross-simulator causal comparison is
+established.
+
+\section{Webots setup attempts}
+Webots is documented but neither scaffolded nor claimed as tested. Log simulator version, official
+NAO/OP3 asset provenance, headless command, motion assets, controller trace, and exact failure here
+before changing that status.
+
+\section{Known limitations}
+Skill adapters encode task knowledge; the defender is scripted; synchronous collection may limit
+throughput; feed-forward actors infer delay only through short observation history; Pymunk remains
+a simple planar world; and robustness profiles cannot span unmodeled hardware failures.
+
+\section{Future physical-robot deployment plan}
+First validate TorchScript observation parity in a supervised simulator. Then integrate a tested
+localization and ball/robot perception stack, collision-safe walking and turning, controlled kick
+motions, communication timestamps, action watchdogs, emergency stops, and conservative field
+tests. A successful deployment requires logged physical trials, not merely controller startup.
+
+\section{Reproducibility checklist}
+\begin{itemize}
+\item Record clean commit, resolved YAML, packages, device, and all seed ranges.
+\item Pass Ruff, the full test suite, both PettingZoo API checks, and the smoke command.
+\item Preserve complete checkpoints, normalizers, curriculum history, CSV metrics, and logs.
+\item Evaluate frozen checkpoints on fixed abstract and Pymunk seeds without retraining.
+\item Aggregate multiple seeds and report variability, tail metrics, and failed runs.
+\item Rebuild both reports from restored Drive artifacts in a fresh Colab runtime.
+\item Describe Pymunk as sim-to-sim and do not infer physical-robot performance.
+\end{itemize}
+\end{document}
+
