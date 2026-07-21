@@ -192,9 +192,9 @@ abstract test, Pymunk transfer, and video scenarios use disjoint configurable se
 The two notebooks are command dashboards rather than hidden implementations:
 
 - `notebooks/phase1_environment_and_baselines.ipynb`: initialization, tests, smoke run, baselines,
-  IPPO, transfer, video, and Drive sync.
+  IPPO, transfer, explicit readiness audit, video, and Drive sync.
 - `notebooks/phase2_training_transfer_report.ipynb`: MAPPO variants, ablations, full evaluation,
-  comparison, reports, and Drive sync.
+  comparison, reports, and Drive sync. It recomputes the Phase-1 audit before allowing training.
 
 They keep the repository under `/content`, use Drive only for persistent artifacts, refuse to pull
 over a dirty checkout, restore runs through latest pointers, and allow later experiment sections to
@@ -203,13 +203,13 @@ run after initialization without replaying earlier cells.
 ## Reports
 
 ```bash
-latexmk -pdf -interaction=nonstopmode -halt-on-error reports/main.tex
-latexmk -pdf -interaction=nonstopmode -halt-on-error reports/surrogate_notes.tex
+latexmk -pdf -interaction=nonstopmode -halt-on-error -outdir=reports reports/main.tex
+latexmk -pdf -interaction=nonstopmode -halt-on-error -outdir=reports reports/surrogate_notes.tex
 ```
 
 The main report is a paper-style account. The surrogate report is the technical ledger for exact
-settings, attempts, failures, and decisions. Both compile before results exist and clearly label
-the result section as pending.
+settings, attempts, failures, and decisions. Both place their build products in `reports/` and
+clearly separate Phase-1 diagnostics from pending Phase-2 comparative results.
 
 ## Current status, limitations, and expected deliverables
 

@@ -40,6 +40,8 @@ transfer_environment:
   wall_elasticity: 0.78
   velocity_control_gain: 8.0
   changed_reaction_delay_steps: 1
+  # Chipmunk contact/friction already dissipates energy; use lower explicit viscous drag.
+  ball_drag_multiplier: 0.78
 
 reward:
   goal: 10.0
@@ -263,9 +265,17 @@ evaluation:
   seed_bases:
     validation: 10000
     curriculum: 20000
-    abstract_test: 30000
-    transfer_test: 40000
+    # The original 30k/40k ranges were consumed while diagnosing and calibrating Phase 1.
+    repair_calibration_abstract: 30000
+    repair_calibration_transfer: 40000
+    abstract_test: 130000
+    transfer_test: 140000
     video: 50000
+  phase1_gate:
+    # These are launch safeguards, not claimed universal performance standards.
+    maximum_random_pymunk_success: 0.50
+    minimum_pymunk_method_success_spread: 0.15
+    minimum_nominal_intercept_success: 0.50
 
 video:
   width: 1280

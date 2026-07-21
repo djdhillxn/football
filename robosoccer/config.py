@@ -126,7 +126,7 @@ def validate_config(config):
     ]
     for field in positive_fields:
         value = _require(config, field)
-        if not isinstance(value, (int, float)) or value <= 0:
+        if not isinstance(value, int | float) or value <= 0:
             raise ValueError(field + " must be a positive number")
 
     if config["ppo"].get("algorithm") not in {"ippo", "mappo"}:

@@ -34,7 +34,7 @@ def json_safe(value):
     """Convert NumPy, Torch, and Path objects into JSON-compatible values."""
     if isinstance(value, dict):
         return {str(key): json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [json_safe(item) for item in value]
     if isinstance(value, Path):
         return str(value)
@@ -289,7 +289,7 @@ class MetricsWriter:
         if self.tensorboard is not None:
             step = int(clean.get("environment_steps", clean.get("update", 0)))
             for key, value in clean.items():
-                if key not in {"environment_steps", "update"} and isinstance(value, (int, float)):
+                if key not in {"environment_steps", "update"} and isinstance(value, int | float):
                     self.tensorboard.add_scalar("train/" + key, value, step)
 
     def close(self):

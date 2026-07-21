@@ -1,10 +1,12 @@
 """Concentrated correctness tests for the mandatory research pipeline."""
 
 import copy
+import csv
 import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from pettingzoo.test import parallel_api_test
@@ -17,7 +19,14 @@ from robosoccer.environment import (
     baseline_actions,
     sample_profile_parameters,
 )
-from robosoccer.evaluation import record_videos
+from robosoccer.evaluation import (
+    add_group_success_statistics,
+    evaluate_baselines,
+    flatten_episode_metrics,
+    phase1_readiness_audit,
+    record_videos,
+    summarize_episodes,
+)
 from robosoccer.training import (
     FailureDirectedCurriculum,
     PPOTrainer,
@@ -99,6 +108,65 @@ def test_abstract_parallel_api(base_config):
 def test_pymunk_parallel_api(base_config):
     env = PymunkSoccerTransferEnv(base_config)
     parallel_api_test(env, num_cycles=30)
+
+
+def test_pymunk_ball_crosses_sideline_and_terminates(base_config):
+    config = copy.deepcopy(base_config)
+    config["environment"]["stationary_truncation_steps"] = 100
+    env = PymunkSoccerTransferEnv(config)
+    try:
+        env.reset(seed=17)
+        half_width = config["environment"]["field_width"] / 2.0
+        env.ball_body.position = (0.0, half_width - 0.02)
+        env.ball_body.velocity = (0.0, 4.0)
+        _, _, terminations, _, infos = env.step({agent: 6 for agent in AGENTS})
+        assert all(terminations.values())
+        assert infos[AGENTS[0]]["termination_reason"] == "out_of_bounds"
+    finally:
+        env.close()
+
+
+def test_pymunk_players_are_constrained_to_playable_field(base_config):
+    env = PymunkSoccerTransferEnv(base_config)
+    try:
+        env.reset(seed=18)
+        half_length = base_config["environment"]["field_length"] / 2.0
+        half_width = base_config["environment"]["field_width"] / 2.0
+        radius = base_config["environment"]["player_radius"]
+        for body in [*env.player_bodies.values(), env.defender_body]:
+            body.position = (half_length + 1.0, half_width + 1.0)
+            body.velocity = (2.0, 2.0)
+        env._constrain_player_bodies()
+        env._sync_from_bodies()
+        positions = [player["position"] for player in env.players.values()]
+        positions.append(env.defender["position"])
+        assert all(abs(position[0]) <= half_length - radius for position in positions)
+        assert all(abs(position[1]) <= half_width - radius for position in positions)
+    finally:
+        env.close()
+
+
+def test_pymunk_kick_impulse_reaches_commanded_velocity(base_config):
+    env = PymunkSoccerTransferEnv(base_config)
+    try:
+        env.reset(seed=19)
+        env.ball_body.velocity = (2.0, -1.0)
+        env._deliver_kick(np.array([1.0, 0.0]), 4.5)
+        np.testing.assert_allclose(
+            [env.ball_body.velocity.x, env.ball_body.velocity.y], [4.5, 0.0], atol=1e-8
+        )
+        env._apply_ball_drag(0.1)
+        expected_drag = (
+            base_config["environment"]["ball_drag"]
+            * base_config["transfer_environment"]["ball_drag_multiplier"]
+        )
+        expected = 4.5 * (1.0 - expected_drag * 0.1)
+        np.testing.assert_allclose(
+            [env.ball_body.velocity.x, env.ball_body.velocity.y], [expected, 0.0], atol=1e-8
+        )
+        assert env.space.damping == pytest.approx(1.0)
+    finally:
+        env.close()
 
 
 @pytest.mark.parametrize("environment_class", [AbstractSoccerEnv, PymunkSoccerTransferEnv])
@@ -230,6 +298,166 @@ def test_role_based_baseline_valid_actions(base_config):
         assert all(env.action_space(agent).contains(action) for agent, action in actions.items())
     finally:
         env.close()
+
+
+def test_role_based_baseline_transfers_carrier_role(base_config):
+    env = AbstractSoccerEnv(base_config)
+    try:
+        env.reset(seed=43)
+        receiver = AGENTS[1]
+        env.ball["position"] = env.players[receiver]["position"].copy()
+        env._update_possession()
+        memory = {"striker": AGENTS[0]}
+        baseline_actions(env, "role_based", memory)
+        assert memory["roles"][receiver] == "striker"
+    finally:
+        env.close()
+
+
+def test_role_based_baseline_assigns_narrow_loose_ball_recovery(base_config):
+    env = AbstractSoccerEnv(base_config)
+    try:
+        env.reset(seed=45)
+        env.ball["position"] = np.array([0.0, 2.2])
+        env.ball["velocity"] = np.array([0.0, 2.0])
+        env.ball["possession"] = None
+        env.players[AGENTS[0]]["position"] = np.array([-1.0, 0.0])
+        env.players[AGENTS[1]]["position"] = np.array([1.0, 0.0])
+        memory = {}
+        actions = baseline_actions(env, "role_based", memory)
+        recovery = next(agent for agent, role in memory["roles"].items() if role == "recovery")
+        assert actions[recovery] == 0
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("environment_class", [AbstractSoccerEnv, PymunkSoccerTransferEnv])
+def test_episode_fraction_metrics_are_bounded(base_config, environment_class):
+    config = small_config(base_config)
+    env = environment_class(config)
+    try:
+        env.reset(seed=44)
+        team_return = 0.0
+        while env.agents:
+            _, rewards, _, _, infos = env.step({agent: 6 for agent in AGENTS})
+            team_return += rewards[AGENTS[0]]
+        metrics = infos[AGENTS[0]]["episode_metrics"]
+        row = flatten_episode_metrics(
+            metrics,
+            team_return,
+            44,
+            "hold",
+            "abstract" if environment_class is AbstractSoccerEnv else "pymunk",
+            env.selected_profile,
+            env.defender["mode"],
+        )
+        assert 0.0 <= row["possession_fraction"] <= 1.0
+        assert 0.0 <= row["redundant_chase_fraction"] <= 1.0
+        assert 0.0 <= row["invalid_action_fraction"] <= 1.0
+    finally:
+        env.close()
+
+
+def test_success_aggregation_distinguishes_profiles_and_defenders():
+    rows = []
+    for defender_mode, successes in [("stationary_goalie", [True, False]), ("intercept", [True, True])]:
+        for success in successes:
+            rows.append(
+                {
+                    "team_return": 1.0 if success else -1.0,
+                    "success": success,
+                    "time_to_score": 1.0 if success else None,
+                    "possession_fraction": 0.5,
+                    "redundant_chase_fraction": 0.0,
+                    "invalid_action_fraction": 0.0,
+                    "attacker_collisions": 0,
+                    "termination_reason": "goal" if success else "timeout",
+                    "action_switches": 0,
+                    "profile": "nominal",
+                    "defender_mode": defender_mode,
+                }
+            )
+    summary = summarize_episodes(rows, bootstrap_samples=10, seed=0)
+    assert "minimum_profile_success_rate" not in summary
+    add_group_success_statistics(summary, pd.DataFrame(rows), "defender_mode", "defender_mode")
+    assert summary["minimum_defender_mode_success_rate"] == pytest.approx(0.5)
+    assert summary["mean_defender_mode_success_rate"] == pytest.approx(0.75)
+
+    rows[0]["profile"] = "delay"
+    rows[1]["profile"] = "delay"
+    profile_summary = summarize_episodes(rows, bootstrap_samples=10, seed=0)
+    assert profile_summary["minimum_profile_success_rate"] == pytest.approx(0.5)
+
+
+def test_baseline_methods_use_paired_seeds(base_config, tmp_path):
+    config = small_config(base_config, tmp_path / "runs")
+    run_dir, summary = evaluate_baselines(
+        config,
+        episodes=2,
+        methods=["random", "role_based"],
+        source_config="configs/base.yaml",
+    )
+    with (run_dir / "eval" / "baseline_episodes.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    for simulator in ["abstract", "pymunk"]:
+        random_seeds = {
+            row["seed"] for row in rows if row["method"] == "random" and row["simulator"] == simulator
+        }
+        role_seeds = {
+            row["seed"]
+            for row in rows
+            if row["method"] == "role_based" and row["simulator"] == simulator
+        }
+        assert random_seeds == role_seeds
+    assert all("minimum_profile_success_rate" not in item for item in summary.values())
+    assert all("minimum_defender_mode_success_rate" in item for item in summary.values())
+
+
+def test_phase1_readiness_audit_has_explicit_baseline_and_learned_gates(base_config):
+    baseline = {}
+    for method, abstract_success, pymunk_success, redundant in [
+        ("random", 0.1, 0.2, 0.3),
+        ("double_chase", 0.2, 0.4, 0.7),
+        ("role_based", 0.3, 0.6, 0.1),
+    ]:
+        for simulator, success in [("abstract", abstract_success), ("pymunk", pymunk_success)]:
+            baseline[method + "__" + simulator] = {
+                "episode_count": base_config["evaluation"]["episodes"],
+                "success_rate": success,
+                "possession_fraction": 0.2,
+                "redundant_chase_fraction": redundant,
+                "invalid_action_rate": 0.1,
+            }
+    # Raise the configured random ceiling for this synthetic example while keeping a wide spread.
+    config = copy.deepcopy(base_config)
+    config["evaluation"]["phase1_gate"]["maximum_random_pymunk_success"] = 0.25
+    abstract = {
+        "episode_count": 30,
+        "success_rate": 0.5,
+        "possession_fraction": 0.2,
+        "redundant_chase_fraction": 0.2,
+        "invalid_action_rate": 0.1,
+        "minimum_defender_mode_success_rate": 0.1,
+        "by_defender_mode": {
+            mode: {
+                "episode_count": base_config["evaluation"]["episodes"],
+                "success_rate": 0.8 if mode == "intercept" else 0.2,
+            }
+            for mode in ["stationary_goalie", "chase_ball", "intercept"]
+        },
+    }
+    transfer = {
+        "episode_count": base_config["evaluation"]["episodes"],
+        "success_rate": 0.3,
+        "possession_fraction": 0.1,
+        "redundant_chase_fraction": 0.1,
+        "invalid_action_rate": 0.1,
+    }
+    audit = phase1_readiness_audit(config, baseline, abstract, transfer)
+    assert audit["baseline_ready"] is True
+    assert audit["phase2_ready"] is True
+    baseline["random__pymunk"]["success_rate"] = 0.9
+    assert phase1_readiness_audit(config, baseline)["baseline_ready"] is False
 
 
 def test_actor_and_central_critic_shapes(base_config):

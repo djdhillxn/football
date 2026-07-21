@@ -126,7 +126,7 @@ def sample_profile_parameters(profile, rng):
     """Sample interpretable profile ranges, preserving integer latency values."""
     sampled = {}
     for key, bounds in profile.get("parameters", {}).items():
-        if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+        if isinstance(bounds, list | tuple) and len(bounds) == 2:
             low, high = bounds
             if isinstance(low, int) and isinstance(high, int):
                 sampled[key] = int(rng.integers(low, high + 1))
@@ -484,6 +484,10 @@ class SoccerEnvBase(ParallelEnv):
             self.players[agent]["action_repeat_remaining"] = 0
 
         self.step_count += 1
+        # Possession is a macro-step fraction. State and pass bookkeeping are updated on every
+        # physics substep, but the metric receives exactly one sample per policy decision.
+        if self.ball["possession"] in self.possible_agents:
+            self.metrics["possession_steps"] += 1
         self._update_communication()
         self._update_metrics(applied, previous_positions)
         next_potential = self._potential_components()
@@ -728,7 +732,6 @@ class SoccerEnvBase(ParallelEnv):
         if possession != previous and previous is not None:
             self.metrics["possession_changes"] += 1
         if possession in self.possible_agents:
-            self.metrics["possession_steps"] += 1
             self.ball["last_touch"] = possession
         if self._pass_pending is not None:
             self._pass_pending["age"] += 1
@@ -1241,8 +1244,13 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
             self.transfer_config.get("changed_reaction_delay_steps", 1)
         )
         self.space = pymunk.Space()
-        drag = self.env_config["ball_drag"] * self.sampled_parameters["ball_drag_multiplier"]
-        self.space.damping = math.exp(-0.35 * drag)
+        self._pymunk_ball_drag = (
+            self.env_config["ball_drag"] * self.sampled_parameters["ball_drag_multiplier"]
+            * self.transfer_config.get("ball_drag_multiplier", 1.0)
+        )
+        # Global Pymunk damping would also slow the controlled players and defender. Ball drag is
+        # applied explicitly below so locomotion and opponent semantics remain independently set.
+        self.space.damping = 1.0
         self.space.gravity = (0.0, 0.0)
         radius = self.env_config["player_radius"]
         mass = self.transfer_config["player_mass"]
@@ -1254,6 +1262,7 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
             shape = pymunk.Circle(body, radius)
             shape.friction = self.transfer_config["player_friction"]
             shape.elasticity = 0.15
+            shape.filter = pymunk.ShapeFilter(categories=0b001, mask=0b111)
             self.space.add(body, shape)
             self.player_bodies[agent] = body
             self.player_shapes[agent] = shape
@@ -1263,6 +1272,7 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
         self.defender_shape = pymunk.Circle(self.defender_body, radius)
         self.defender_shape.friction = self.transfer_config["player_friction"]
         self.defender_shape.elasticity = 0.18
+        self.defender_shape.filter = pymunk.ShapeFilter(categories=0b001, mask=0b111)
         self.space.add(self.defender_body, self.defender_shape)
         ball_mass = self.transfer_config["ball_mass"] * self.sampled_parameters["ball_mass_multiplier"]
         ball_radius = self.env_config["ball_radius"]
@@ -1272,26 +1282,30 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
         self.ball_shape = pymunk.Circle(self.ball_body, ball_radius)
         self.ball_shape.friction = self.transfer_config["ball_friction"]
         self.ball_shape.elasticity = self.sampled_parameters["ball_restitution"]
+        # The ball crosses field lines so both simulators use the same goal, clear, and
+        # out-of-bounds terminal conditions. Only players collide with the containment wall.
+        self.ball_shape.filter = pymunk.ShapeFilter(categories=0b100, mask=0b001)
         self.space.add(self.ball_body, self.ball_shape)
-        self._add_walls()
+        self._add_player_boundaries()
 
-    def _add_walls(self):
+    def _add_player_boundaries(self):
         half_length = self.env_config["field_length"] / 2.0
         half_width = self.env_config["field_width"] / 2.0
-        goal_half = self.env_config["goal_width"] / 2.0
         static = self.space.static_body
+        # Continuous player-only boundaries prevent an attacker or defender from escaping
+        # through a goal opening. The ball ignores these shapes and is classified by the shared
+        # terminal checks after crossing a field line.
         endpoints = [
             ((-half_length, -half_width), (half_length, -half_width)),
             ((-half_length, half_width), (half_length, half_width)),
-            ((-half_length, -half_width), (-half_length, -goal_half)),
-            ((-half_length, goal_half), (-half_length, half_width)),
-            ((half_length, -half_width), (half_length, -goal_half)),
-            ((half_length, goal_half), (half_length, half_width)),
+            ((-half_length, -half_width), (-half_length, half_width)),
+            ((half_length, -half_width), (half_length, half_width)),
         ]
         for start, end in endpoints:
             segment = pymunk.Segment(static, start, end, 0.04)
             segment.friction = 0.55
             segment.elasticity = self.transfer_config["wall_elasticity"]
+            segment.filter = pymunk.ShapeFilter(categories=0b010, mask=0b001)
             self.space.add(segment)
 
     def _physics_substep(self, actions, dt):
@@ -1322,6 +1336,8 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
             )
             self._defender_clear_if_possible()
             self.space.step(sub_dt)
+            self._apply_ball_drag(sub_dt)
+            self._constrain_player_bodies()
             self._bound_body_speeds()
         self._sync_from_bodies()
         self._defender_ball_history.append(self.ball["position"].copy())
@@ -1364,6 +1380,30 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
             clip_length(np.array([self.ball_body.velocity.x, self.ball_body.velocity.y]), ball_maximum)
         )
 
+    def _apply_ball_drag(self, dt):
+        decay = max(0.0, 1.0 - self._pymunk_ball_drag * dt)
+        self.ball_body.velocity = (self.ball_body.velocity.x * decay, self.ball_body.velocity.y * decay)
+
+    def _constrain_player_bodies(self):
+        """Keep controlled bodies inside the playable rectangle as a numerical safeguard."""
+        half_length = self.env_config["field_length"] / 2.0
+        half_width = self.env_config["field_width"] / 2.0
+        radius = self.env_config["player_radius"]
+        minimum_x, maximum_x = -half_length + radius, half_length - radius
+        minimum_y, maximum_y = -half_width + radius, half_width - radius
+        bodies = [*self.player_bodies.values(), self.defender_body]
+        for body in bodies:
+            x_value = float(np.clip(body.position.x, minimum_x, maximum_x))
+            y_value = float(np.clip(body.position.y, minimum_y, maximum_y))
+            velocity_x = float(body.velocity.x)
+            velocity_y = float(body.velocity.y)
+            if x_value != body.position.x and np.sign(velocity_x) == np.sign(body.position.x):
+                velocity_x = 0.0
+            if y_value != body.position.y and np.sign(velocity_y) == np.sign(body.position.y):
+                velocity_y = 0.0
+            body.position = (x_value, y_value)
+            body.velocity = (velocity_x, velocity_y)
+
     def _sync_from_bodies(self):
         for agent in self.possible_agents:
             body = self.player_bodies[agent]
@@ -1379,15 +1419,19 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
         self.ball["velocity"] = np.array([self.ball_body.velocity.x, self.ball_body.velocity.y])
 
     def _deliver_kick(self, direction, speed):
-        impulse = direction * speed * self.ball_body.mass
+        target_velocity = np.asarray(direction) * speed
+        current_velocity = np.array([self.ball_body.velocity.x, self.ball_body.velocity.y])
+        impulse = (target_velocity - current_velocity) * self.ball_body.mass
         self.ball_body.apply_impulse_at_world_point(tuple(impulse), tuple(self.ball_body.position))
 
     def _deliver_dribble_impulse(self, impulse):
-        scaled = np.asarray(impulse) * self.ball_body.mass * 3.5
+        scaled = np.asarray(impulse) * self.ball_body.mass
         self.ball_body.apply_impulse_at_world_point(tuple(scaled), tuple(self.ball_body.position))
 
     def _defender_kick(self, direction, speed):
-        impulse = direction * speed * self.ball_body.mass
+        target_velocity = np.asarray(direction) * speed
+        current_velocity = np.array([self.ball_body.velocity.x, self.ball_body.velocity.y])
+        impulse = (target_velocity - current_velocity) * self.ball_body.mass
         self.ball_body.apply_impulse_at_world_point(tuple(impulse), tuple(self.ball_body.position))
 
     def close(self):
@@ -1414,6 +1458,7 @@ def baseline_actions(env, method, memory=None):
         raise ValueError("Unknown baseline method: " + str(method))
     if memory is None:
         memory = {}
+    memory["pass_cooldown"] = max(0, int(memory.get("pass_cooldown", 0)) - 1)
     times = {}
     for agent in env.possible_agents:
         distance = np.linalg.norm(env.players[agent]["position"] - env.ball["position"])
@@ -1421,9 +1466,16 @@ def baseline_actions(env, method, memory=None):
             env.players[agent]["velocity"], unit_vector(env.ball["position"] - env.players[agent]["position"])
         ))
         times[agent] = float(distance / closing)
-    candidate = min(times, key=times.get)
+    possession = env.ball.get("possession")
+    candidate = possession if possession in AGENTS else min(times, key=times.get)
     striker = memory.get("striker", candidate)
-    if candidate != striker and times[candidate] + 0.25 < times[striker]:
+    if possession in AGENTS:
+        # A completed pass immediately transfers the carrier role instead of leaving the receiver
+        # in the support state while the ball runs past it.
+        striker = possession
+        memory["striker"] = striker
+        memory["candidate_steps"] = 0
+    elif candidate != striker and times[candidate] + 0.25 < times[striker]:
         if memory.get("candidate") == candidate:
             memory["candidate_steps"] = memory.get("candidate_steps", 0) + 1
         else:
@@ -1445,18 +1497,51 @@ def baseline_actions(env, method, memory=None):
     goal = np.array([env.env_config["field_length"] / 2.0, 0.0])
     shooting_blocked = distance_to_segment(defender, ball, goal) < 0.48
     teammate_lane_open = distance_to_segment(defender, ball, teammate_position) > 0.55
-    if kickable and shooting_blocked and teammate_lane_open and teammate_position[0] > ball[0] - 0.4:
+    teammate_distance = float(np.linalg.norm(teammate_position - ball))
+    half_width = env.env_config["field_width"] / 2.0
+    pass_is_safe = (
+        teammate_lane_open
+        and 0.7 < teammate_distance < 2.2
+        and teammate_position[0] > ball[0] + 0.2
+        and abs(teammate_position[1]) < half_width - 1.0
+        and abs(ball[1]) < half_width - 1.2
+    )
+    central_shooting_lane = abs(ball[1]) <= env.env_config["goal_width"] * 0.8
+    if (
+        kickable
+        and shooting_blocked
+        and pass_is_safe
+        and memory["pass_cooldown"] == 0
+    ):
         striker_action = 4
-    elif kickable and ball[0] > 0.5:
+        memory["pass_cooldown"] = 5
+    elif kickable and central_shooting_lane and (not shooting_blocked or ball[0] > 0.8):
         striker_action = 3
     elif kickable:
-        striker_action = 1 if defender[1] <= ball[1] else 2
+        # Near a sideline, select the lane that pulls the next dribble back toward the centre.
+        if ball[1] > env.env_config["goal_width"] * 0.6:
+            striker_action = 2
+        elif ball[1] < -env.env_config["goal_width"] * 0.6:
+            striker_action = 1
+        else:
+            striker_action = 1 if defender[1] <= ball[1] else 2
     else:
         striker_action = 0
     actions = {striker: striker_action, supporter: 5}
-    if np.linalg.norm(teammate_position - striker_position) < 0.55:
-        actions[supporter] = 5
+    ball_speed = float(np.linalg.norm(env.ball["velocity"]))
+    attacker_separation = float(np.linalg.norm(teammate_position - striker_position))
+    loose_ball_danger = (
+        possession not in AGENTS
+        and (abs(ball[1]) > half_width - 1.0 or ball_speed > 1.5)
+        and attacker_separation > 0.8
+    )
+    if loose_ball_danger:
+        # Temporarily assign a recovery role when a fast loose ball is headed toward failure.
+        # This is deliberately narrower than double-chase and returns to support on control.
+        actions[supporter] = 0
     memory["roles"] = {striker: "striker", supporter: "support"}
+    if loose_ball_danger:
+        memory["roles"][supporter] = "recovery"
     return actions
 
 

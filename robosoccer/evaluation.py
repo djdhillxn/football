@@ -73,16 +73,20 @@ def flatten_episode_metrics(metrics, team_return, seed, method, simulator, profi
     for key, value in metrics.items():
         if key == "sampled_parameters":
             row["sampled_parameters"] = json.dumps(json_safe(value), sort_keys=True)
-        elif isinstance(value, (str, int, float, bool)) or value is None:
+        elif isinstance(value, str | int | float | bool) or value is None:
             row[key] = value
     steps = max(1, int(metrics.get("episode_steps", 1)))
     row["possession_fraction"] = metrics.get("possession_steps", 0) / steps
     row["redundant_chase_fraction"] = metrics.get("redundant_ball_chasing_steps", 0) / steps
+    agent_action_steps = steps * len(AGENTS)
     row["invalid_action_fraction"] = (
         metrics.get("invalid_kick_attempts", 0) + metrics.get("invalid_pass_attempts", 0)
-    ) / steps
+    ) / agent_action_steps
     row["mean_attacker_separation"] = metrics.get("separation_sum", 0.0) / steps
     row["mean_support_quality"] = metrics.get("support_quality_sum", 0.0) / steps
+    for name in ["possession_fraction", "redundant_chase_fraction", "invalid_action_fraction"]:
+        if not 0.0 <= row[name] <= 1.0:
+            raise ValueError(name + " must be in [0, 1], observed " + str(row[name]))
     return row
 
 
@@ -192,11 +196,199 @@ def summarize_episodes(data, bootstrap_samples=1000, seed=0):
             successes, np.mean, bootstrap_samples, rng
         ),
     }
-    if "profile" in data:
+    if "profile" in data and data["profile"].nunique(dropna=False) > 1:
         profile_rates = data.groupby("profile")["success"].mean()
         summary["minimum_profile_success_rate"] = float(profile_rates.min())
         summary["mean_profile_success_rate"] = float(profile_rates.mean())
     return summary
+
+
+def add_group_success_statistics(summary, data, column, label):
+    """Add explicitly named min/mean success statistics for an evaluation grouping."""
+    if column not in data or data.empty:
+        return summary
+    rates = data.groupby(column)["success"].mean()
+    if rates.empty:
+        return summary
+    summary["minimum_" + label + "_success_rate"] = float(rates.min())
+    summary["mean_" + label + "_success_rate"] = float(rates.mean())
+    return summary
+
+
+def phase1_readiness_audit(config, baseline_summary, abstract_summary=None, transfer_summary=None):
+    """Evaluate transparent launch safeguards from completed Phase 1 summaries."""
+    thresholds = config["evaluation"].get("phase1_gate", {})
+    maximum_random = float(thresholds.get("maximum_random_pymunk_success", 0.50))
+    minimum_spread = float(thresholds.get("minimum_pymunk_method_success_spread", 0.15))
+    minimum_intercept = float(thresholds.get("minimum_nominal_intercept_success", 0.50))
+    minimum_episodes = int(config["evaluation"].get("episodes", 100))
+    checks = {}
+
+    def add_check(name, passed, observed, criterion):
+        checks[name] = {
+            "passed": bool(passed),
+            "observed": json_safe(observed),
+            "criterion": criterion,
+        }
+
+    fraction_names = ["possession_fraction", "redundant_chase_fraction", "invalid_action_rate"]
+    summaries = list(baseline_summary.values())
+    if abstract_summary is not None:
+        summaries.append(abstract_summary)
+        summaries.extend(abstract_summary.get("by_defender_mode", {}).values())
+    if transfer_summary is not None:
+        summaries.append(transfer_summary)
+        summaries.extend(transfer_summary.get("by_defender_mode", {}).values())
+    bounded = all(
+        0.0 <= float(summary[name]) <= 1.0
+        for summary in summaries
+        for name in fraction_names
+        if name in summary
+    )
+    add_check("bounded_fraction_metrics", bounded, bounded, "every reported fraction is in [0, 1]")
+
+    required_baselines = [
+        method + "__" + simulator
+        for method in ["random", "double_chase", "role_based"]
+        for simulator in ["abstract", "pymunk"]
+    ]
+    baselines_complete = all(
+        key in baseline_summary
+        and int(baseline_summary[key].get("episode_count", 0)) >= minimum_episodes
+        for key in required_baselines
+    )
+    add_check(
+        "baseline_evaluation_complete",
+        baselines_complete,
+        {
+            key: baseline_summary.get(key, {}).get("episode_count", 0)
+            for key in required_baselines
+        },
+        "each scripted method/simulator cell has at least " + str(minimum_episodes) + " episodes",
+    )
+
+    pymunk_keys = [key for key in baseline_summary if key.endswith("__pymunk")]
+    pymunk_rates = [float(baseline_summary[key]["success_rate"]) for key in pymunk_keys]
+    random_pymunk = float(baseline_summary["random__pymunk"]["success_rate"])
+    spread = max(pymunk_rates) - min(pymunk_rates)
+    add_check(
+        "pymunk_random_not_saturated",
+        random_pymunk <= maximum_random,
+        random_pymunk,
+        "random Pymunk success <= " + str(maximum_random),
+    )
+    add_check(
+        "pymunk_policy_sensitive",
+        spread >= minimum_spread,
+        spread,
+        "Pymunk scripted-method success spread >= " + str(minimum_spread),
+    )
+
+    role_better = all(
+        baseline_summary["role_based__" + simulator]["success_rate"]
+        > baseline_summary["random__" + simulator]["success_rate"]
+        for simulator in ["abstract", "pymunk"]
+    )
+    add_check(
+        "role_success_exceeds_random",
+        role_better,
+        {
+            simulator: {
+                "role": baseline_summary["role_based__" + simulator]["success_rate"],
+                "random": baseline_summary["random__" + simulator]["success_rate"],
+            }
+            for simulator in ["abstract", "pymunk"]
+        },
+        "role-based success exceeds random in both simulators",
+    )
+    role_coordinates = all(
+        baseline_summary["role_based__" + simulator]["redundant_chase_fraction"]
+        < baseline_summary["double_chase__" + simulator]["redundant_chase_fraction"]
+        for simulator in ["abstract", "pymunk"]
+    )
+    add_check(
+        "role_reduces_redundant_chasing",
+        role_coordinates,
+        {
+            simulator: {
+                "role": baseline_summary["role_based__" + simulator][
+                    "redundant_chase_fraction"
+                ],
+                "double_chase": baseline_summary["double_chase__" + simulator][
+                    "redundant_chase_fraction"
+                ],
+            }
+            for simulator in ["abstract", "pymunk"]
+        },
+        "role-based redundant chasing is below double-chase in both simulators",
+    )
+
+    baseline_names = [
+        "bounded_fraction_metrics",
+        "baseline_evaluation_complete",
+        "pymunk_random_not_saturated",
+        "pymunk_policy_sensitive",
+        "role_success_exceeds_random",
+        "role_reduces_redundant_chasing",
+    ]
+    baseline_ready = all(checks[name]["passed"] for name in baseline_names)
+
+    if abstract_summary is not None:
+        intercept = abstract_summary.get("by_defender_mode", {}).get("intercept", {})
+        intercept_success = float(intercept.get("success_rate", 0.0))
+        add_check(
+            "nominal_ippo_learns_intercept",
+            intercept_success >= minimum_intercept,
+            intercept_success,
+            "abstract intercept success >= " + str(minimum_intercept),
+        )
+        strongest_scripted = max(
+            float(baseline_summary[method + "__abstract"]["success_rate"])
+            for method in ["random", "double_chase", "role_based"]
+        )
+        add_check(
+            "nominal_ippo_exceeds_scripted_abstract",
+            intercept_success > strongest_scripted,
+            {"ippo_intercept": intercept_success, "strongest_scripted": strongest_scripted},
+            "nominal IPPO intercept success exceeds every scripted abstract baseline",
+        )
+        mode_counts = {
+            mode: abstract_summary.get("by_defender_mode", {}).get(mode, {}).get(
+                "episode_count", 0
+            )
+            for mode in DEFENDER_MODES
+        }
+        add_check(
+            "standard_defender_modes_complete",
+            all(int(count) >= minimum_episodes for count in mode_counts.values()),
+            mode_counts,
+            "each defender mode has at least " + str(minimum_episodes) + " episodes",
+        )
+        add_check(
+            "defender_mode_minimum_reported",
+            "minimum_defender_mode_success_rate" in abstract_summary,
+            abstract_summary.get("minimum_defender_mode_success_rate"),
+            "standard summary contains an explicit defender-mode minimum",
+        )
+    if transfer_summary is not None:
+        add_check(
+            "frozen_pymunk_evaluation_completed",
+            int(transfer_summary.get("episode_count", 0)) >= minimum_episodes,
+            transfer_summary.get("episode_count", 0),
+            "at least " + str(minimum_episodes) + " frozen-policy Pymunk episodes are present",
+        )
+
+    learned_names = [
+        "nominal_ippo_learns_intercept",
+        "nominal_ippo_exceeds_scripted_abstract",
+        "standard_defender_modes_complete",
+        "defender_mode_minimum_reported",
+        "frozen_pymunk_evaluation_completed",
+    ]
+    phase2_ready = baseline_ready and all(
+        name in checks and checks[name]["passed"] for name in learned_names
+    )
+    return {"baseline_ready": baseline_ready, "phase2_ready": phase2_ready, "checks": checks}
 
 
 def save_episode_outputs(rows, output_dir, config, extra_summary=None):
@@ -364,12 +556,12 @@ def evaluate_learned_run(
                 dynamic_ncols=True,
             )
             try:
-                for mode_index, defender_mode in enumerate(defender_modes):
+                for defender_mode in defender_modes:
                     for episode in range(episodes):
                         row, _ = run_episode(
                             config,
                             simulator,
-                            seed + mode_index * 1000 + episode,
+                            seed + episode,
                             method,
                             actor,
                             normalizer,
@@ -432,10 +624,15 @@ def evaluate_learned_run(
             )
             for mode, group in data.groupby("defender_mode")
         }
+        add_group_success_statistics(summary, data, "defender_mode", "defender_mode")
         write_json(output_dir / "summary.json", summary)
     if suite == "profiles":
         plot_profile_success(data, output_dir / "success_by_profile.png")
-    gaps = update_transfer_gaps(run_dir)
+    canonical_transfer_evaluation = prefix is None and (
+        (simulator == "abstract" and suite == "standard")
+        or (simulator == "pymunk" and suite == "transfer")
+    )
+    gaps = update_transfer_gaps(run_dir) if canonical_transfer_evaluation else None
     if gaps is not None:
         summary["transfer_gaps"] = gaps
         write_json(output_dir / "summary.json", summary)
@@ -489,14 +686,14 @@ def evaluate_baselines(
     seed_bases = config["evaluation"]["seed_bases"]
     progress = tqdm(total=len(methods) * 2 * int(episodes), desc="Baselines", dynamic_ncols=True)
     try:
-        for method_index, method in enumerate(methods):
+        for method in methods:
             for simulator in ["abstract", "pymunk"]:
                 seed_base = seed_bases["abstract_test" if simulator == "abstract" else "transfer_test"]
                 for episode in range(int(episodes)):
                     row, _ = run_episode(
                         config,
                         simulator,
-                        seed_base + method_index * 1000 + episode,
+                        seed_base + episode,
                         method,
                         profile="nominal",
                     )
@@ -506,9 +703,13 @@ def evaluate_baselines(
         data.to_csv(run_dir / "eval" / "baseline_episodes.csv", index=False)
         grouped_summary = {}
         for (method, simulator), group in data.groupby(["method", "simulator"]):
-            grouped_summary[method + "__" + simulator] = summarize_episodes(
+            method_summary = summarize_episodes(
                 group, config["evaluation"].get("bootstrap_samples", 1000), config["experiment"]["seed"]
             )
+            add_group_success_statistics(
+                method_summary, group, "defender_mode", "defender_mode"
+            )
+            grouped_summary[method + "__" + simulator] = method_summary
         write_json(run_dir / "eval" / "baseline_summary.json", grouped_summary)
         plot_baseline_comparison(data, run_dir / "plots" / "baseline_success.png")
         if videos:

@@ -16,20 +16,20 @@ smoke configuration. Every run stores the resolved YAML, source commit, package 
 command, status, seed allocations, and artifact paths. A failed run retains its traceback and an
 emergency checkpoint when possible.
 
-The executed Phase 1 notebook completed, but pip reported conflicts with preinstalled Colab
-packages: Colab expected pandas 2.2.2, torchvision expected the runtime's Torch 2.11, and numba
-expected NumPy below 2.1, while the project environment installed pandas 2.3.3, Torch 2.7.1, and
-NumPy 2.2.6. None of those dependent packages is used by the present pipeline and all 30 tests
-passed, so this did not invalidate Phase 1. Eliminate or isolate the conflicts before the final
-multi-seed campaign to keep fresh-runtime reproduction predictable.
+The initial Phase 1 notebook completed, but its editable install replaced Colab's Torch, NumPy, and
+pandas versions and produced dependency conflicts. The revised notebooks preserve Colab's
+CUDA-enabled numerical stack, install only project-specific missing packages at pinned versions,
+and install this project editable with \texttt{--no-deps}. They print the effective versions and
+fail immediately on installation errors. The current local validation passes all 40 tests.
 
 \section{Detailed environment mechanics}
 The field is $9\,\mathrm{m}\times6\,\mathrm{m}$ with a $1.5\,\mathrm{m}$ goal. A macro decision is
 repeated for four $0.1\,\mathrm{s}$ low-level steps. The abstract model limits acceleration,
 translation, and turn rate; applies linear ball drag; resolves circular contacts; and delivers kick
 velocity only inside range and angle tolerances. The transfer model independently creates Pymunk
-bodies, force controllers, collision shapes, walls with goal openings, damping, friction,
-elasticity, and impulse kicks over multiple integration substeps.
+bodies, force controllers, collision shapes, player-only static containment boundaries, friction,
+elasticity, explicit ball drag, and impulse kicks over multiple integration substeps. The ball
+crosses field lines for shared terminal classification; players cannot leave through the goal.
 
 Observation and action delay queues are bounded. Object misses set confidence to zero without
 changing truth. Packet loss preserves the previous delivered teammate action and increments its
@@ -89,22 +89,26 @@ bootstrap from the final observation but stop the recursive advantage chain acro
 gradient finiteness is mandatory; a NaN raises after an emergency checkpoint attempt.
 
 \section{Seed allocation}
-Training begins at the experiment seed. Ordinary validation, curriculum validation, abstract final
-test, Pymunk transfer, and video scenarios begin at 10,000, 20,000, 30,000, 40,000, and 50,000
-respectively. Final runs must record every exact seed and must not reuse model-selection outcomes as
-final tests.
+Training begins at the experiment seed. Ordinary validation and curriculum validation begin at
+10,000 and 20,000. The original 30,000/40,000 abstract/transfer ranges were consumed during the
+repair investigation and are now explicitly named calibration ranges. New abstract and Pymunk test
+ranges begin at 130,000 and 140,000; video scenarios remain at 50,000. Final runs must record every
+exact seed and must not reuse model-selection or calibration outcomes as final tests.
 
 \section{Experiment ledger}
 The following entries are Phase 1 diagnostics, not final comparative rows.
 \begingroup
 \footnotesize
 \setlength{\tabcolsep}{3pt}
-\begin{longtable}{p{0.62in}p{0.78in}p{0.62in}p{1.15in}p{0.30in}p{1.55in}p{1.0in}}
+\begin{longtable}{p{0.62in}p{0.78in}p{0.62in}p{1.15in}p{0.55in}p{1.35in}p{0.90in}}
 \toprule Date & Run name & Commit & Configuration & Seed & Outcome & Decision \\
 \midrule
 2026-07-21 & smoke test & 3937e9e & smoke test & 0 & complete; artifacts and API path valid & infrastructure only \\
 2026-07-21 & baselines & 3937e9e & base; 100 each & 0 & abstract 0.06--0.30; Pymunk 0.73--0.76 & block Phase 2 \\
 2026-07-21 & IPPO nominal & 3937e9e & IPPO; 2.0M steps & 0 & learned intercept; transfer non-discriminative & retain; repair benchmark \\
+2026-07-21 & repair calibration & working tree & base; 100 each & 30k/40k & mechanics and gate calibration & exclude from final evidence \\
+2026-07-21 & repaired baselines & working tree & base; 100 each & 130k/140k & abstract 0.03--0.28; Pymunk 0.49--0.68 & baseline gate passes \\
+2026-07-21 & frozen IPPO audit & working tree & best actor; no update & 130k/140k & abstract intercept 0.88; Pymunk 0.43 & conditional Phase 2 go \\
 \bottomrule
 \end{longtable}
 \endgroup
@@ -112,15 +116,21 @@ The following entries are Phase 1 diagnostics, not final comparative rows.
 \section{Hyperparameter attempts}
 Record each deviation from the checked-in defaults, the validation evidence motivating it, and
 whether the choice was made before final-test evaluation. The Phase 1 nominal IPPO run used the
-checked-in defaults; no post-test hyperparameter selection was performed. Its selected checkpoint
+checked-in defaults; no policy hyperparameter selection was performed after its test. Its selected checkpoint
 occurred at 1,810,432 environment steps with validation success 0.825 over 40 fixed validation
 episodes. The final checkpoint at 2,007,040 steps scored 0.750 on the same-size validation batch,
 so the selection rule correctly retained the earlier checkpoint.
 
-\section{Failed runs and debugging notes}
-All three restored Phase 1 run records have status \texttt{complete} and no failure exception. A
-completed process is not necessarily a valid experiment; the following audit findings block the
-Phase 2 launch.
+The transfer adapter's explicit ball-drag multiplier is 0.78. This benchmark calibration was made
+after diagnosing the original reflective-boundary and global-damping defects using the retired
+30k/40k ranges. The implementation and launch thresholds were frozen before inspecting the new
+130k/140k ranges. This is simulator repair, not a learned-method hyperparameter, but it remains part
+of the provenance record.
+
+\section{Initial no-go audit and repair record}
+All three restored Phase 1 run records had status \texttt{complete} and no failure exception. A
+completed process is not necessarily a valid experiment; the initial audit found the following
+problems.
 \begin{enumerate}
 \item \textbf{Pymunk benchmark saturation.} Random, double-chase, role-based, and nominal-IPPO
 success rates are 0.760, 0.730, 0.740, and 0.730. Random and IPPO used the same seeds
@@ -147,10 +157,20 @@ makes zero valid pass attempts in 400 final-evaluation episodes and has invalid-
 before treating goal rate as evidence of cooperative skill use.
 \end{enumerate}
 
-The IPPO optimization trace itself is healthy: all recorded scalar diagnostics are finite, mean
-training success rises from 0.061 over the first 25 updates to 0.769 over the last 25, and nominal
-intercept test success is 0.840 over 100 episodes. Preserve the best checkpoint. Do not spend
-accelerator time on another long run until the evaluation defects above are repaired.
+The repairs use one terminal classifier after the Pymunk ball crosses a field line, player-only
+containment, ball-only explicit drag, target-velocity kick impulses, and bounded speed safeguards.
+Possession is sampled once per macro step; invalid attempts divide by two-agent action steps;
+summaries explicitly separate defender modes from perturbation profiles; and scripted methods and
+defender modes use paired seeds. The role heuristic now transfers the striker role on possession,
+uses safer pass and shot conditions, and assigns a narrow loose-ball recovery role. Dedicated tests
+cover each repair.
+
+On untouched 130k/140k ranges, all six 100-episode baseline cells pass the coded gate. Random,
+double-chase, and role success is 0.03, 0.15, and 0.28 in abstract dynamics and 0.49, 0.68, and 0.66
+in Pymunk. Role redundant chasing is 0.029 in Pymunk versus 0.475 for double-chase. The frozen actor
+reproduces nominal abstract learning at 0.88 against intercept, but its Pymunk success is only 0.43
+versus random's 0.49 (two-sided exact paired $p=0.519$). This negative transfer result is valid and
+motivates Phase 2; it is not evidence of physical transfer.
 
 \section{Discarded ideas}
 Version one intentionally excludes image observations, joint-level locomotion learning, full 5v5
@@ -166,25 +186,29 @@ before changing that status.
 \section{Known limitations}
 Skill adapters encode task knowledge; the defender is scripted; synchronous collection may limit
 throughput; feed-forward actors infer delay only through short observation history; Pymunk remains
-a simple planar world; and robustness profiles cannot span unmodeled hardware failures. The Phase
-1 checkpoint adds observed limitations: opponent-mode generalization is poor (0.060 against
-chase-ball versus 0.840 against the trained intercept defender), no passing behavior was observed,
-and the current Pymunk protocol is too permissive to measure policy quality.
+a simple planar world; and robustness profiles cannot span unmodeled hardware failures. The frozen
+Phase 1 checkpoint generalizes poorly across opponent modes (0.10 against chase-ball versus 0.88
+against its trained intercept defender), produces no valid passes in the held-out diagnostic, and
+does not exceed random Pymunk success (0.43 versus 0.49). The repaired benchmark is policy-sensitive,
+so these are method limitations rather than reasons to modify the test again.
 
 \section{Phase 2 entry gate}
-Phase 2 is a no-go until all of the following are satisfied.
+The repaired code and held-out diagnostic satisfy the gate, yielding a conditional go. The gate
+requires all of the following and is recomputed by both notebooks.
 \begin{itemize}
-\item Correct possession normalization and defender/profile aggregation, with tests asserting
-bounded fractions and the intended grouping.
-\item Make abstract and Pymunk boundary/termination choices comparable or document and calibrate a
-deliberate difference; keep every player in a valid playable region.
-\item Rerun 100 episodes per scripted method in both simulators and confirm that Pymunk outcomes
-separate meaningful behavior from random action selection.
-\item Re-evaluate the frozen Phase 1 best IPPO checkpoint on the corrected abstract and Pymunk
-suites. Retrain only if abstract dynamics change or nominal learning fails to reproduce.
-\item Inspect representative successes and failures and confirm that outcome labels match the
-rendered trajectories.
+\item Six complete 100-episode scripted method/simulator cells and bounded fraction metrics.
+\item Random Pymunk success at most 0.50 and a scripted-method spread of at least 0.15.
+\item Role success above random and role redundant chasing below double-chase in both simulators.
+\item Three complete 100-episode defender-mode evaluations, an explicit defender-mode minimum,
+and nominal IPPO intercept success of at least 0.50 and above every scripted abstract baseline.
+\item A complete 100-episode frozen-policy Pymunk evaluation. Transfer success is measured, not
+required to be high; a weak nominal transfer result is the motivation for robustness training.
 \end{itemize}
+
+Before spending Phase 2 compute, run the revised Phase 1 notebook once from a clean post-repair
+commit and require its \texttt{eval/phase1\_readiness.json} to report
+\texttt{phase2\_ready: true}. This final condition gives the fresh actor, configuration, commit,
+and all evaluations one coherent provenance record.
 
 \section{Future physical-robot deployment plan}
 First validate TorchScript observation parity in a supervised simulator. Then integrate a tested
