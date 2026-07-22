@@ -1,4 +1,47 @@
-% Phase 1 status after the clean post-repair Colab rerun.
-% scripts.compare_runs may replace this file after the Phase 2 multi-seed study.
-\newcommand{\ResultsAvailable}{phaseone}
-\newcommand{\ResultsStatus}{The clean post-repair Phase 1 run passes every coded readiness gate. Nominal IPPO remains brittle across defenders and transfers worse than random in Pymunk; comparative MAPPO results remain pending.}
+% Audited Phase-2 results.  This file intentionally keeps evaluation suites
+% separate; the generic comparison exporter currently averages unlike suites.
+\newcommand{\ResultsAvailable}{true}
+\newcommand{\ResultsStatus}{Phase 2 single-seed pilot complete; promising but mixed transfer evidence, not a replicated final result.}
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrrrr}
+\toprule
+Method & Abstract & Abstract & Pymunk & Profiles & Profile & Grid \\
+ & all modes & intercept & transfer & mean & minimum & AUC \\
+\midrule
+Nominal MAPPO & 0.413 & 0.700 & 0.440 & 0.417 & 0.260 & 0.494 \\
+Uniform DR MAPPO & 0.337 & 0.500 & 0.380 & 0.416 & 0.160 & 0.346 \\
+Failure-directed MAPPO & 0.337 & 0.540 & \textbf{0.640} & \textbf{0.521} & 0.240 & 0.366 \\
+\bottomrule
+\end{tabular}
+\caption{Audited frozen-best-checkpoint results for training seed 0. ``Abstract all modes'' has
+300 episodes (100 per defender); the matched nominal-intercept abstract and Pymunk transfer
+figures each use 100 episodes. Profile mean/minimum use 18 profiles with 50 episodes each. Grid
+AUC is the mean success over 25 action-delay/localization-noise cells with 20 episodes per cell.
+These suites are deliberately not averaged together.}
+\label{tab:phase2-suite-results}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llrrr}
+\toprule
+Comparison & Pymunk suite & Success difference & Discordant wins--losses & Exact $p$ \\
+\midrule
+Failure-directed $-$ nominal & transfer & $+0.200$ & 33--13 & 0.0045 \\
+Failure-directed $-$ uniform & transfer & $+0.260$ & 38--12 & 0.00031 \\
+Failure-directed $-$ nominal & profiles & $+0.104$ & 278--184 & $1.4\times10^{-5}$ \\
+Failure-directed $-$ uniform & profiles & $+0.106$ & 242--147 & $1.7\times10^{-6}$ \\
+Failure-directed $-$ nominal & delay--noise grid & $-0.128$ & 98--162 & $8.7\times10^{-5}$ \\
+Failure-directed $-$ uniform & delay--noise grid & $+0.020$ & 118--108 & 0.549 \\
+\bottomrule
+\end{tabular}
+\caption{Paired episode-level contrasts on identical evaluation scenarios. The exact McNemar
+tests quantify uncertainty conditional on these three trained actors. They do not replace
+independent training-seed replication.}
+\label{tab:phase2-paired-results}
+\end{table}

@@ -1,244 +1,308 @@
 \documentclass[10pt]{article}
-\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[margin=0.9in]{geometry}
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{xcolor}
+\usepackage{array}
 \usepackage[hidelinks]{hyperref}
 \title{Failure-Directed Domain Randomization for Cooperative Robot-Soccer Skill Selection}
 \author{Research software report}
-\date{\today}
+\date{22 July 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-We present a compact multi-fidelity testbed for parameter-shared multi-agent reinforcement
-learning in a two-attacker robot-soccer task. Policies train in a fast abstract simulator and are
-frozen before zero-shot evaluation in an independently implemented Pymunk rigid-body simulator.
-The proposed curriculum directs domain randomization toward perturbation profiles on which the
-current policy fails. Pymunk transfer is sim-to-sim evaluation and a controlled proxy for selected
-sim-to-real robustness questions, not physical deployment. An initial Phase 1 audit found a
-saturated transfer benchmark and metric defects. The repaired implementation now passes explicit
-boundary, aggregation, paired-seed, and policy-sensitivity safeguards. A clean coherent rerun now
-passes the Phase 2 launch gate while exposing a 0.530 nominal cross-simulator success gap.
+This project asks whether a decentralized, parameter-shared two-attacker soccer policy trained in
+a fast abstract simulator can transfer unchanged to an independently implemented Pymunk
+rigid-body simulator under action delays, perception error, communication loss, locomotion
+variation, and ball/kick changes. Phase 1 established a corrected, policy-sensitive benchmark.
+Phase 2 trained nominal, uniformly randomized, and failure-directed MAPPO for 2,007,040 steps each
+and evaluated their frozen best checkpoints. In the single-seed pilot, failure-directed training
+raises nominal Pymunk success from 0.440 to 0.640 and the 18-profile mean from 0.417 to 0.521, while
+reducing invalid actions and redundant chasing. The result is not uniformly robust: its
+action-delay/localization-noise grid score is 0.366 versus 0.494 for nominal MAPPO, with severe
+degradation once delay is introduced. Valid passes are too rare to support a learned-cooperation
+claim. The result is therefore a non-trivial and promising pilot, not a completed scientific
+claim. The immediate goal is targeted delay diagnosis followed by a small, pre-registered
+multi-seed confirmation---not a move to a harder simulator.
 \end{abstract}
 
-\section{Introduction and motivation}
-Robot soccer combines partial observability, delayed control, contact dynamics, communication
-failure, and cooperation. End-to-end physical training is expensive, while conclusions drawn from
-one simulator can be brittle. We therefore ask whether a decentralized, cooperative skill policy
-learned in a deliberately simple simulator survives a change in simulator fidelity and unseen
-perturbations. The contribution is a failure-directed curriculum that spends training episodes on
-the policy's empirically weakest named perturbation profiles.
+\section{Project goal, scope, and intended contribution}
+The original research question is:
+\begin{quote}
+Can a cooperative, parameter-shared robot-soccer policy trained in a deliberately fast abstract
+simulator transfer zero-shot, without weight updates, to an independent rigid-body simulator under
+unseen dynamics, sensing, communication, and control perturbations; and does failure-directed
+domain randomization transfer better than equal-budget nominal and uniform training?
+\end{quote}
 
-\section{RoboCup and robot-soccer context}
-RoboCup established robot soccer as a long-horizon benchmark joining perception, control, and
-multi-agent reasoning \cite{kitano1997robocup}. Modern learned soccer controllers demonstrate the
-value of reinforcement learning for dynamic bipedal play \cite{haarnoja2023soccer}. Our scope is
-narrower: high-level behavior selection for two abstract attackers, assuming lower-level motion
-and perception stacks.
+The intended tangible contribution is a controlled mechanism result, not a leaderboard: an
+interpretable curriculum should spend experience on observed failure modes, improve a frozen
+policy's cross-simulator robustness, preserve useful nominal behavior, and reveal which
+perturbation families remain unsolved. The primary artifact is a reproducible 2-v-1 high-level
+skill-selection study with independent physics implementations, fixed seeds, auditable run
+records, paired evaluations, and representative videos.
 
-\section{Related work}
-PPO uses a clipped surrogate objective to stabilize on-policy updates
-\cite{schulman2017ppo}. MAPPO showed that careful centralized-value training can be effective in
-cooperative multi-agent tasks \cite{yu2022mappo}; this repository uses centralized training with
-decentralized execution. Domain randomization varies simulator parameters to improve transfer
-\cite{tobin2017domain}, while automatic curricula adapt the distribution as learning proceeds
-\cite{openai2019rubik}. The present method uses explicit, interpretable failure profiles rather
-than an unstructured Cartesian parameter distribution. Cross-fidelity evaluation follows the
-broader motivation of using simulation variation to reveal model-specific policy behavior.
+Three boundaries prevent the scope from drifting. First, the seven macro-skills assume a lower
+level locomotion and perception stack; this is not joint-level humanoid control. Second, Pymunk is
+a sim-to-sim transfer target and only a proxy for selected sim-to-real questions. Third, the
+current task can study coordination, but goal scoring alone cannot establish passing or rich team
+play. Full 5-v-5/11-v-11 play, pixels, self-play populations, Webots, and physical deployment are
+extensions only after the core transfer claim survives replication.
 
-\section{Problem formulation}
-We model the task as a cooperative partially observable stochastic game
-$\langle\mathcal{S},\{\mathcal{O}_i\},\{\mathcal{A}_i\},P,r,\gamma\rangle$.
-Two agents receive distinct egocentric observations $o_i$, select discrete skills through one
-shared policy $\pi_\theta(a_i\mid o_i)$, and receive one team reward. During MAPPO training only, a
-critic $V_\phi(s)$ observes the true joint state. The actor remains decentralized at evaluation.
+\subsection{Completion ladder}
+The project has passed engineering validity and completed one full comparative pilot. It has not
+yet passed training-seed replication, a delay-robustness gate, or a behaviorally grounded
+cooperation gate. We will call the core project successful only if failure-directed MAPPO beats
+both controls on a predeclared cross-physics profile metric across independent training seeds, is
+not materially worse than nominal MAPPO on the delay--noise stress test, and preserves nominal
+abstract competence. Passing/role behavior will be reported as a separate claim with explicit
+opportunities and counts.
 
-\section{Abstract simulator}
-The training simulator explicitly integrates bounded acceleration, speed, turn rate, ball drag,
-collisions, boundary and goal events, kick impulses, a delayed-action queue, perception queues, and
-imperfect teammate messages. Each policy step repeats a selected macro-action for four low-level
-steps. The scripted defender can guard, chase, or predict an interception point and clears the ball
-through ordinary limited motion rather than teleportation.
+\section{Robot-soccer context and related work}
+RoboCup's long-term objective is autonomous humanoid team play under the laws of football
+\cite{kitano1997robocup}. That grand challenge is useful context, but it is not the scale of this
+study. Work on simulated humanoid football uses a staged hierarchy from motor control, through
+football drills, to long-horizon team play \cite{liu2022teamplay}; recent quadruped work similarly
+combines learned low-level skills with high-level MAPPO and self-play before physical deployment
+\cite{su2025quadruped}. Google Research Football also separates simpler academy scenarios from
+full-game benchmarks \cite{kurach2020football}. These precedents support using a focused 2-v-1
+scenario to isolate a transfer question rather than prematurely adding full-game complexity.
 
-\section{Pymunk transfer simulator}
-The transfer environment rebuilds players and the ball as Pymunk rigid bodies. Velocity targets
-are realized by bounded forces and torque; kicks set a target ball velocity through a mass-scaled
-impulse delivered at contact range. The ball crosses field lines and is classified by the same
-goal, clear, and out-of-bounds rules as the abstract simulator, while player-only static boundaries
-and numerical clipping keep every player in the playable rectangle. Inertia, collision response,
-ball drag, integration substeps, and reaction delay still differ from the abstract equations.
-Observation, action, reward, and metric interfaces remain fixed, so the actor transfers unchanged.
-This is zero-shot cross-simulator transfer, not completed physical sim-to-real deployment.
+PPO provides the clipped on-policy objective \cite{schulman2017ppo}; MAPPO provides centralized
+value learning with decentralized execution for cooperative tasks \cite{yu2022mappo}. Domain
+randomization is a standard transfer technique \cite{tobin2017domain}, but uniform sampling can
+produce suboptimal, high-variance policies, motivating adaptive sampling
+\cite{mehta2020active}. Simulation-optimization bias is also a relevant threat: a policy may exploit
+one simulator's model error rather than learn transferable behavior \cite{muratore2018domain}.
+Finally, few-run deep-RL comparisons require explicit uncertainty and independent training runs
+\cite{agarwal2021precipice}. These observations directly motivate the controls, cross-physics test,
+and next replication gate used here.
 
-\section{Observation and action design}
-Each 61-dimensional local vector contains self motion and action state, delayed ball history,
-egocentric goalposts and boundaries, teammate kinematics and stale message state, defender state,
-confidence flags, and identity. The seven actions are approach, left/right dribble, shoot, pass,
-move to support, and hold/face ball. Noise affects perceived state only; true dynamics and
-centralized state remain separate.
+\section{Task and method}
+The task is a cooperative partially observable stochastic game with two attackers, one scripted
+defender, and one shared team reward. Each attacker receives a distinct 61-dimensional egocentric
+observation and independently samples from one shared categorical policy. The seven high-level
+actions are approach, left/right dribble, shoot, pass, move to support, and hold/face ball.
 
-\section{IPPO and MAPPO}
-Both algorithms use one categorical actor. IPPO shares a local value network and computes one
-advantage per local trajectory. MAPPO uses one centralized team value per environment step and
-broadcasts the team advantage to the two actor samples; its value loss is counted once. GAE
-bootstraps through time-limit truncation but does not propagate across a reset. Separate Adam
-optimizers, clipped policy and value objectives, entropy regularization, gradient clipping,
-target-KL stopping, and linear learning-rate decay follow standard PPO practice.
+Training occurs in an abstract simulator with explicit bounded acceleration, turn rate, ball drag,
+contact and boundary handling, kick impulses, observation/action queues, and imperfect teammate
+messages. Evaluation rebuilds players and ball as Pymunk rigid bodies using force/torque control,
+collision shapes, substeps, and mass-scaled impulses. Observation, action, reward, and termination
+interfaces are shared; actor weights and normalization are frozen during transfer.
 
-\section{Failure-directed domain randomization}
-Let $f_i$ be a smoothed failure rate for profile $i$. After warm-up, deterministic validation on
-disjoint seeds updates
+MAPPO uses the shared decentralized actor and a centralized team-value critic. The failure-directed
+curriculum evaluates 17 non-nominal profiles every 20 updates. If $f_i$ is the exponentially
+smoothed failure rate for profile $i$, the conditional non-nominal sampling distribution is
 \begin{align}
- w_i &= (\epsilon + f_i)^\alpha,\\
- \tilde p_i &= (1-\beta)\frac{w_i}{\sum_j w_j}+\frac{\beta}{N}.
+ w_i &= (\epsilon+f_i)^\alpha, \\
+ p_i &= (1-\beta)\frac{w_i}{\sum_j w_j}+\frac{\beta}{N},
 \end{align}
-The distribution is projected onto the simplex with a hard maximum profile probability. The
-uniform mixture preserves exploration; the cap prevents one persistent failure from consuming all
-training. Curriculum evaluation never updates observation normalization.
+followed by capped-simplex projection. Training retains a 0.10 nominal-episode probability. The
+uniform control samples the same enabled profile set and uses the same nominal probability and
+training budget.
 
-\section{Experimental protocol}
-Training, ordinary validation, curriculum validation, abstract test, Pymunk transfer, and video
-seeds occupy disjoint ranges. Policies are selected on fixed abstract validation seeds, frozen,
-then evaluated on nominal defenders, all profiles, and an action-delay by localization-noise grid.
-Multiple training seeds are aggregated by experiment name. Checkpoints include all optimizer,
-normalizer, RNG, schedule, and curriculum state needed to resume.
-
-\section{Baselines and ablations}
-The matrix includes random, double-chase, and hysteretic role-based heuristics; nominal IPPO;
-nominal MAPPO; uniformly randomized MAPPO; and failure-directed MAPPO. Focused ablations remove
-action-delay, communication, or observation-noise profile families while retaining the same code
-path and configuration inheritance.
-
-\section{Metrics}
-Primary measures are goal success, return, time to score, and the abstract-to-Pymunk success gap.
-Secondary measures include pass completion, possession, redundant chasing, collisions, invalid
-skills, action switches, worst-decile return, CVaR, explicitly separated defender-mode and
-perturbation-profile minima, normalized robustness area, and bootstrap intervals. Reward-component
-logs distinguish sparse task reward from small
-potential-based progress, possession, and support shaping.
+\section{Experimental protocol and audit standard}
+Training, fixed abstract validation, curriculum evaluation, held-out abstract evaluation, Pymunk
+transfer, and video seeds are separated. Every Phase 2 run used seed 0, commit
+\texttt{45e80751}, an NVIDIA L4, 245 PPO updates, and
+2,007,040 environment steps. Each frozen best actor has:
+\begin{itemize}
+\item 300 abstract standard episodes: 100 for each of stationary, chase-ball, and intercept;
+\item 100 nominal Pymunk intercept transfer episodes;
+\item 900 Pymunk profile episodes: 50 for each of 18 profiles including nominal; and
+\item 500 Pymunk grid episodes: 20 in each action-delay by localization-noise cell.
+\end{itemize}
+Thus Phase 2 contains 5,400 training-method evaluation episodes, plus training validation and
+videos. All three metadata records say \texttt{complete}; metrics are finite; no training or
+evaluation exception is recorded. Approximate KL and clipping fractions stay small, and learning
+rates decay nearly to zero, so simply extending the same jobs is not the right next action.
 
 \section{Results}
 \IfFileExists{reports/generated_results.tex}{\input{reports/generated_results.tex}}{
-  \newcommand{\ResultsStatus}{Final empirical results have not yet been generated.}}
+  \newcommand{\ResultsStatus}{Audited results were not found.}}
 \begin{center}
-\fcolorbox{black}{gray!10}{\parbox{0.88\linewidth}{\centering\ResultsStatus}}
+\fcolorbox{black}{gray!10}{\parbox{0.90\linewidth}{\centering\ResultsStatus}}
 \end{center}
 
-\subsection{Phase 1 clean rerun and readiness audit}
-The clean post-repair notebook run was produced on 21 July 2026 at commit \texttt{16c94cd}. The
-fresh IPPO actor completed 2,007,040 abstract-simulator steps with no recorded failure. Mean
-training success increased from 0.088 over the first 25 updates to 0.837 over the last 25. The
-selected checkpoint was saved at 1,277,952 steps, where a fixed 40-episode validation set reached
-0.975 success; final validation was 0.950. These are credible signs that the implementation can
-optimize the nominal training task, but they remain one-seed diagnostics rather than comparative
-robustness evidence.
+\subsection{Training behavior}
+Nominal MAPPO's rolling training success rises from 0.038 to 0.682 and its final fixed nominal
+validation reaches 0.825. Uniform and failure-directed training are harder, ending at rolling
+success 0.275 and 0.269; their final nominal validation is 0.450 and 0.475. The best observed
+nominal validation for uniform and failure-directed training is 0.600 and 0.525. Entropy falls in
+all three runs without numerical instability. This is expected evidence of a robustness--nominal
+specialization trade-off, although a single training seed cannot establish its typical size.
 
-\begin{table}[ht]
+The failure curriculum updates 12 times. Its final probability ranges only from 0.0359 to 0.0823
+and entropy is 2.795, close to the 17-profile maximum $\log 17=2.833$. It is therefore adaptive but
+not concentrated. The highest final weights include high action delay, low ball friction,
+medium observation noise, and combined conditions. Curriculum measurements use only five episodes
+per profile per update, so each raw success estimate moves in increments of 0.2 and is noisy.
+
+\IfFileExists{reports/figures/curriculum_probabilities.png}{
+\begin{figure}[t]
 \centering
-\small
-\begin{tabular}{lllrrr}
-\toprule
-Method & Simulator & Defender scope & Episodes & Success & Mean return \\
-\midrule
-Random & abstract & intercept & 100 & 0.030 & $-4.585$ \\
-Double chase & abstract & intercept & 100 & 0.150 & $-3.624$ \\
-Role based & abstract & intercept & 100 & 0.280 & 0.682 \\
-Nominal IPPO & abstract & all three & 300 & 0.417 & 1.653 \\
-Nominal IPPO & abstract & intercept & 100 & 0.870 & 7.722 \\
-Nominal IPPO & abstract & stationary goalie & 100 & 0.330 & 0.392 \\
-Nominal IPPO & abstract & chase ball & 100 & 0.050 & $-3.153$ \\
-Random & Pymunk & intercept & 100 & 0.490 & 0.242 \\
-Double chase & Pymunk & intercept & 100 & 0.680 & 5.526 \\
-Role based & Pymunk & intercept & 100 & 0.660 & 5.884 \\
-Frozen nominal IPPO & Pymunk & intercept & 100 & 0.340 & 0.247 \\
-\bottomrule
-\end{tabular}
-\caption{Post-repair Phase 1 diagnostics on new fixed test seeds: 130,000--130,099 in abstract and
-140,000--140,099 in Pymunk. All rows come from the clean post-repair notebook; the Pymunk row
-evaluates the same frozen best actor without updating its weights. ``All three'' averages equal-sized
-stationary-goalie, chase-ball, and intercept subsets and should not be compared directly with a
-single-defender baseline.}
-\label{tab:phase1-checkpoint}
-\end{table}
-
-The nominal policy solves its trained intercept opponent substantially more often than every
-scripted abstract baseline. It does not demonstrate broad opponent robustness: success is 0.050
-against the chase-ball defender and 0.330 against the stationary goalie. Across the 300 abstract
-and 100 Pymunk learned-policy diagnostic episodes it makes no valid pass attempt, so Phase 1 still
-does not show that success depends on learned passing cooperation.
-
-The repaired Pymunk benchmark is no longer saturated. Scripted success spans 0.490--0.680, and the
-role policy reduces redundant chasing from 0.475 for double-chase to 0.029 while retaining 0.660
-success. On paired seeds 140,000--140,099, fresh IPPO succeeds on 34 episodes versus 49 for random:
-18 seeds are successes for both, 35 failures for both, 16 IPPO-only successes, and 31 random-only
-successes. A two-sided exact paired test on the 47 discordant seeds gives $p=0.040$. Thus the clean
-nominal actor transfers significantly worse than random under this paired test and remains below
-both deliberate heuristics. This is a policy-transfer failure rather than a saturated-benchmark
-artifact. Matched intercept success falls from 0.870 in abstract dynamics to 0.340 in Pymunk, a
-0.530 cross-simulator gap that directly motivates Phase 2's robustness methods.
-
-The instrumentation defects are corrected. Possession receives one sample per macro step;
-possession, redundant-chase, and invalid-action fractions are range checked; invalid attempts use
-the two-agent action count as their denominator; defender-mode minima are explicit; and profile
-minima are emitted only for multi-profile suites. The observed defender-mode minimum is 0.050,
-which honestly exposes the frozen actor's chase-ball weakness.
-
-\subsection{Phase 2 launch decision}
-The clean post-repair run produces a \textbf{go}. Every coded
-gate passes: six baseline cells each contain 100 episodes, all reported fractions are bounded,
-random Pymunk success is below 0.50, the Pymunk method spread exceeds 0.15, role coordination beats
-random and reduces redundant chasing, all three defender modes have 100 learned-policy episodes,
-and nominal IPPO clearly exceeds the scripted abstract controls. The baseline and fresh nominal
-actor, evaluations, videos, resolved configurations, commit, and
-\texttt{phase1\_readiness.json} now belong to one coherent post-repair run, and that file reports
-\texttt{phase2\_ready: true}. This closes the original no-go. The Phase 2 notebook independently
-recomputes the same checks and refuses to launch MAPPO otherwise.
-
-This is an engineering launch gate, not a robustness claim. Random Pymunk success is 0.490, only
-0.010 below the saturation threshold, and its 95\% bootstrap interval extends above 0.50. More
-importantly, the nominal actor's paired Pymunk result is worse than random. Phase 2 should proceed
-because these weaknesses are now measurable on a policy-sensitive benchmark, not because Phase 1
-has solved transfer.
-
-The comparison command should replace generated content only from completed, validated artifacts.
-Smoke-run observations remain infrastructure diagnostics and must not be interpreted as final
-evidence.
-
-\IfFileExists{reports/figures/method_success_comparison.png}{
-\begin{figure}[t]\centering
-\includegraphics[width=0.78\linewidth]{reports/figures/method_success_comparison.png}
-\caption{Observed method comparison generated from registered artifacts.}
+\includegraphics[width=0.92\linewidth]{reports/figures/curriculum_probabilities.png}
+\caption{Failure-directed conditional sampling probabilities. High-delay failures increasingly
+attract samples, but the final distribution remains broad.}
+\label{fig:curriculum}
 \end{figure}}{}
 
-\section{Qualitative behavior and failure analysis}
-The video workflow records nominal, transfer, and forced-profile trajectories with action and
-outcome overlays. Analysis should distinguish coordination failures (role oscillation, redundant
-chasing, poor support), control failures (delay and movement response), perception/communication
-failures, and contact-model failures. Representative examples should use fixed seeds rather than
-favorable outcomes. The clean run records three nominal IPPO videos in each simulator, including
-successes and out-of-bounds failures. A separate post-repair spot check recorded Pymunk role-policy
-successes and an out-of-bounds failure with outcome overlays; players remained inside the rendered
-field and labels matched terminal events. These are mechanics checks and qualitative examples,
-not representative behavioral rates.
+\subsection{What transferred}
+Failure-directed MAPPO obtains 0.640 success on the canonical nominal Pymunk transfer set, compared
+with 0.440 for nominal and 0.380 for uniform MAPPO. It also raises the 18-profile mean to 0.521 from
+0.417 and 0.416. On the 900 profile episodes it lowers out-of-bounds termination to 0.226
+(nominal 0.354), invalid-action fraction to 0.157 (nominal 0.236; uniform 0.381), and redundant
+chasing to 0.042 (nominal 0.117; uniform 0.100). It improves on nominal MAPPO in 12 of 18 individual
+profiles, especially nominal Pymunk (0.680), fast movement (0.820), slow movement (0.620), low
+observation noise (0.640), and communication profiles (0.580--0.640). This is a meaningful
+single-checkpoint transfer result, not a trivial re-expression of training return.
+
+It is not yet a learned-policy victory over the deliberate Pymunk heuristics from Phase 1. On the
+same nominal transfer seeds, double-chase and role-based success is 0.680 and 0.660 versus FDR's
+0.640; neither paired contrast is detectably different. FDR exceeds random's 0.490 by 0.150, but
+the exact paired result is borderline ($p=0.053$). The present positive claim is therefore about
+FDR relative to equal-budget learned MAPPO controls, not best-overall soccer performance.
+
+\IfFileExists{reports/figures/robustness_profiles.png}{
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.98\linewidth]{reports/figures/robustness_profiles.png}
+\caption{Pymunk success for each named perturbation profile, 50 episodes per method/profile.
+Failure-directed MAPPO leads on most profiles but not on the high/medium delay or combined cases.}
+\label{fig:profiles}
+\end{figure}}{}
+
+\subsection{What did not transfer}
+The delay--noise grid reverses the headline ordering: nominal MAPPO scores 0.494, failure-directed
+0.366, and uniform 0.346. Failure-directed success at zero action delay is 0.65 averaged over noise
+levels, then falls to 0.38, 0.25, 0.32, and 0.23 for delays one through four. Its named
+\texttt{action\_delay\_high} and \texttt{action\_delay\_medium} results are only 0.260 and 0.240,
+despite high delay receiving the curriculum's largest final sampling weight. Meanwhile nominal
+MAPPO's grid average increases rather than decreases at several nonzero delays. One plausible
+inference is that delay smooths an overly reactive nominal action sequence, but queue, reset, and
+macro-repeat traces must be inspected before treating that as mechanism rather than implementation
+artifact.
+
+\IfFileExists{reports/figures/consolidated_robustness_heatmaps.png}{
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.98\linewidth]{reports/figures/consolidated_robustness_heatmaps.png}
+\caption{Action-delay/localization-noise Pymunk stress test. The failure-directed actor is strong
+at delay zero and fragile once delayed, whereas nominal MAPPO shows the opposite, counterintuitive
+pattern.}
+\label{fig:grid}
+\end{figure}}{}
+
+The adaptive curriculum therefore found hard profiles but did not solve its hardest family. Its
+five-episode updates may chase noise; a feed-forward actor with three frames of history may also be
+structurally weak under multi-step delayed control. The combined moderate/severe profile successes
+of 0.380/0.320, below nominal's 0.580/0.540, reinforce this concern. These results rule out a broad
+claim that failure-directed training is already the most robust method.
+
+\subsection{Cooperation and videos}
+Phase 2 includes six failure-directed MP4s: two abstract successes and one abstract out-of-bounds
+failure, plus two Pymunk successes and one Pymunk out-of-bounds failure. They verify rendering,
+outcome labels, approach/shot behavior, and useful spatial separation. They do not show a passing
+strategy. Across 900 profile episodes, valid pass counts are only 5/12 for nominal, 29/71 for
+uniform, and 4/6 for failure-directed MAPPO; canonical Pymunk transfer contains zero completed
+passes for all methods. Consequently the reported completion proportions have tiny denominators.
+The reduced redundant-chase fraction supports role separation, but learned passing cooperation is
+not demonstrated.
+
+\subsection{Reporting defect discovered by the audit}
+The generic comparison exporter groups only by method and simulator. It consequently averages the
+100-episode transfer test, 900 profile suite, and 500 stress grid, and treats differences between
+these suites as error bars. Its method-comparison and transfer-gap plots are not valid evidence and
+are deliberately excluded here. Tables~\ref{tab:phase2-suite-results} and
+\ref{tab:phase2-paired-results} retain suite identity. This is a reporting defect, not corruption
+of the episode CSVs or trained policies.
+
+\section{Decision: a yellow light, not a graduation}
+The project is on its intended path. It has moved beyond trivial infrastructure: two independent
+dynamics implementations, approximately six million Phase 2 training steps, 5,400 frozen-policy
+evaluation episodes, an adaptive curriculum, and paired scenario-level differences reveal a real
+and interpretable method effect. At the same time, the scientific objective is not complete. There
+is one training seed, the two robustness suites disagree, the FDR actor is delay-fragile, and the
+task has not elicited meaningful passing. We should proceed to a focused Phase 2 confirmation, but
+we should not yet claim general superiority or move to Webots/full-game soccer.
+
+\section{Prioritized execution plan}
+\begin{enumerate}
+\item \textbf{P0---audit delay semantics without retraining.} Add deterministic trace tests for
+the queued command at latencies 0--5, queue state at reset, macro-action repeat, and action age.
+Replay matched grid seeds for all three frozen actors and log chosen, queued, and executed actions.
+Exit criterion: every latency has a hand-checkable expected trace, and the nominal improvement
+with delay has a behavioral explanation or a fixed bug.
+
+\item \textbf{P0---repair evaluation/report semantics.} Make suite a required grouping key,
+generate canonical transfer gaps only from abstract-intercept versus Pymunk-transfer rows, and
+report completed/attempted passes rather than an unsupported percentage. Mark the current
+130k/140k ranges as exploratory because they have now informed decisions; allocate untouched
+confirmatory ranges. Exit criterion: an automated test prevents unlike suites from being pooled.
+
+\item \textbf{P0---add a cooperation probe, not a new simulator.} Construct a fixed 2-v-1
+evaluation scenario in which the carrier's direct shooting lane is blocked and the support player
+has the viable lane. Log pass opportunities, attempts, completions, receiver possession, and goals
+after a pass. Record matched-seed videos for all three actors. This determines whether the current
+reward/action design can support the word ``cooperative.''
+
+\item \textbf{P1---run the smallest decisive replication.} After P0 freezes semantics, train
+seeds 1 and 2 for nominal, uniform, and failure-directed MAPPO: six new jobs, identical budgets,
+with no tuning on confirmatory evaluation seeds. Report every seed and a seed-aware interval. The
+predeclared primary result is 18-profile Pymunk mean success; require FDR to exceed both controls.
+Require grid AUC to be non-inferior to nominal within 0.05 and nominal abstract-intercept success
+to be non-inferior within 0.10. If the direction is stable in at least two of three seeds, expand to
+five seeds for the final claim; otherwise diagnose or report a negative result rather than sweep.
+
+\item \textbf{P1---target the delay mechanism only if replication preserves the failure.} The
+first ablation is FDR without the action-delay family, already scaffolded in the notebook. Compare
+it with a more reliable curriculum estimate (more than five episodes per profile, or uncertainty-
+aware weighting) and, if needed, a recurrent actor. Change one mechanism at a time. Communication
+and observation-noise ablations are secondary because current evidence points most strongly to
+delay.
+
+\item \textbf{P2---produce the final story package.} Create matched same-seed videos and traces,
+suite-specific figures, per-seed tables, confidence intervals, failure taxonomy, and a short
+reproducible command manifest. The intended story is either a replicated targeted-transfer gain
+with a known boundary, or an honest finding that adaptive failure sampling overfits noisy/hard
+profiles. Both are useful; cherry-picked success clips are not.
+
+\item \textbf{P3---increase fidelity only after the core gate passes.} A third simulator or
+Webots becomes valuable once the same frozen actor robustly transfers across current physics and
+the behavior probe shows a real cooperative skill. Physical deployment additionally requires
+perception/localization, safe locomotion, kick control, watchdogs, and hardware logs; the successful
+zero-shot biped work relied on high-frequency control and targeted dynamics randomization
+\cite{haarnoja2023soccer}, capabilities outside the present stack.
+\end{enumerate}
+
+\subsection{Work to avoid now}
+Do not extend the seed-0 runs after the learning rate has decayed, tune repeatedly against the now-
+inspected test seeds, average unlike suites, treat episode-level $p$-values as training-run
+replication, claim cooperation from redundant-chase alone, run all scaffolded ablations at once,
+or divert effort to full-game/self-play/Webots before the delay contradiction is resolved.
 
 \section{Limitations and claim boundaries}
-The task omits images, recurrent memory, joint-level locomotion, self-play, learned opponents, and
-full-team tactics. The scripted skill adapters still encode useful soccer structure. Pymunk does
-not model sensing, compliance, actuator limits, falls, or hardware damage. Consequently the study
-is multi-fidelity and sim-to-real-oriented; it cannot establish physical transfer or safety.
+The environment omits images, recurrence, learned opponents, joint-level locomotion, falls,
+actuator and sensing limits, and physical safety. Macro-skill adapters encode soccer structure.
+Pymunk can be easier than the abstract simulator for some trajectories, so a negative transfer gap
+is not automatically evidence of realism or robustness. The paired tests condition on one actor
+per method; only independent training seeds address optimizer variance. Finally, the curriculum's
+profile definitions and this analysis were informed by current outcomes, so new confirmatory seeds
+must remain untouched until the next protocol is frozen.
 
 \section{Conclusion}
-The repository supplies an auditable experiment for asking whether adaptive, failure-directed
-variation improves cooperative policy robustness across simulator implementations. The repaired
-Phase 1 benchmark is policy-sensitive, its metrics are bounded and correctly grouped, and the
-frozen nominal actor still learns the trained abstract task while exhibiting a measurable Pymunk
-gap. Phase 2 is technically ready now that the clean Phase 1 provenance run is complete; comparative robustness
-claims remain pending the planned multi-seed study. A later Webots or robot phase should be
-attempted only after the simulator protocol is reproduced and a complete perception, localization,
-locomotion, and safety stack is available.
+Phase 2 is complete as a pilot and has yielded a worthwhile result: failure-directed MAPPO is
+substantially better on nominal Pymunk transfer and most named perturbation profiles, with cleaner
+action and role metrics, but it is markedly worse than nominal MAPPO on delayed-control stress
+tests. That tension is the research finding and the next target. The project remains aligned with
+its original objective; it should now become narrower and more decisive, not broader. Resolve the
+delay semantics, establish whether cooperation is real, and run six carefully controlled
+replication jobs. Only a replicated profile gain with no material delay-grid regression justifies
+graduating to a harder simulator.
 
 \bibliographystyle{plain}
 \bibliography{reports/references}
