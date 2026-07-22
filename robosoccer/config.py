@@ -148,6 +148,9 @@ def validate_config(config):
     disabled = config["randomization"].get("disabled_families", [])
     if not isinstance(disabled, list):
         raise ValueError("randomization.disabled_families must be a list")
+    disabled_parameters = config["randomization"].get("disabled_parameters", [])
+    if not isinstance(disabled_parameters, list):
+        raise ValueError("randomization.disabled_parameters must be a list")
     return config
 
 

@@ -121,6 +121,13 @@ videos. All three metadata records say \texttt{complete}; metrics are finite; no
 evaluation exception is recorded. Approximate KL and clipping fractions stay small, and learning
 rates decay nearly to zero, so simply extending the same jobs is not the right next action.
 
+The confirmation protocol is now frozen in code. The exploratory 130k/140k evaluation ranges are
+not reused: confirmatory abstract, transfer, profile, robustness, cooperation, and delay-audit
+ranges begin at 230k, 240k, 241k, 242k, 250k, and 260k, respectively. An automated gate requires
+three complete training seeds per method, FDR profile superiority over both controls with the same
+direction in at least two matched seeds, grid non-inferiority within 0.05, and abstract-intercept
+non-inferiority within 0.10.
+
 \section{Results}
 \IfFileExists{reports/generated_results.tex}{\input{reports/generated_results.tex}}{
   \newcommand{\ResultsStatus}{Audited results were not found.}}
@@ -212,14 +219,15 @@ uniform, and 4/6 for failure-directed MAPPO; canonical Pymunk transfer contains 
 passes for all methods. Consequently the reported completion proportions have tiny denominators.
 The reduced redundant-chase fraction supports role separation, but learned passing cooperation is
 not demonstrated.
-
-\subsection{Reporting defect discovered by the audit}
-The generic comparison exporter groups only by method and simulator. It consequently averages the
-100-episode transfer test, 900 profile suite, and 500 stress grid, and treats differences between
-these suites as error bars. Its method-comparison and transfer-gap plots are not valid evidence and
-are deliberately excluded here. Tables~\ref{tab:phase2-suite-results} and
-\ref{tab:phase2-paired-results} retain suite identity. This is a reporting defect, not corruption
-of the episode CSVs or trained policies.
+\subsection{Reporting defect discovered and repaired by the audit}
+The pilot's generic comparison exporter grouped only by method and simulator. It consequently
+averaged the 100-episode transfer test, 900-profile suite, and 500-episode stress grid, and treated
+differences between unlike suites as error bars. The underlying episode CSVs and trained policies
+were not corrupted. The repaired exporter makes the exact evaluation name a grouping key, retains
+the training seed, computes canonical gaps only from same-run abstract-intercept and Pymunk-transfer
+rows, and writes a seed-level replication summary. A regression test now prevents unlike suites
+from being pooled. Tables~\ref{tab:phase2-suite-results} and
+\ref{tab:phase2-paired-results} retain suite identity.
 
 \section{Decision: a yellow light, not a graduation}
 The project is on its intended path. It has moved beyond trivial infrastructure: two independent
@@ -230,21 +238,25 @@ is one training seed, the two robustness suites disagree, the FDR actor is delay
 task has not elicited meaningful passing. We should proceed to a focused Phase 2 confirmation, but
 we should not yet claim general superiority or move to Webots/full-game soccer.
 
-\section{Prioritized execution plan}
+\section{Implemented confirmation workflow and execution order}
+The following sequence is implemented in the cleaned Phase 2 notebook. Expensive commands are
+restart-safe and each completed or failed run is copied to Drive immediately. The notebook restores
+the seed-0 checkpoints, but never extends their training; it runs seeds 1 and 2 only when a matching
+complete run is absent. Notebook execution, rather than further design work, is now the next step.
 \begin{enumerate}
-\item \textbf{P0---audit delay semantics without retraining.} Add deterministic trace tests for
+\item \textbf{P0---audit delay semantics without retraining.} Run deterministic trace tests for
 the queued command at latencies 0--5, queue state at reset, macro-action repeat, and action age.
 Replay matched grid seeds for all three frozen actors and log chosen, queued, and executed actions.
 Exit criterion: every latency has a hand-checkable expected trace, and the nominal improvement
 with delay has a behavioral explanation or a fixed bug.
 
-\item \textbf{P0---repair evaluation/report semantics.} Make suite a required grouping key,
+\item \textbf{P0---use the repaired evaluation/report semantics.} Keep suite as a required grouping key,
 generate canonical transfer gaps only from abstract-intercept versus Pymunk-transfer rows, and
 report completed/attempted passes rather than an unsupported percentage. Mark the current
 130k/140k ranges as exploratory because they have now informed decisions; allocate untouched
 confirmatory ranges. Exit criterion: an automated test prevents unlike suites from being pooled.
 
-\item \textbf{P0---add a cooperation probe, not a new simulator.} Construct a fixed 2-v-1
+\item \textbf{P0---run the cooperation probe, not a new simulator.} Use the fixed mirrored 2-v-1
 evaluation scenario in which the carrier's direct shooting lane is blocked and the support player
 has the viable lane. Log pass opportunities, attempts, completions, receiver possession, and goals
 after a pass. Record matched-seed videos for all three actors. This determines whether the current
@@ -259,7 +271,8 @@ to be non-inferior within 0.10. If the direction is stable in at least two of th
 five seeds for the final claim; otherwise diagnose or report a negative result rather than sweep.
 
 \item \textbf{P1---target the delay mechanism only if replication preserves the failure.} The
-first ablation is FDR without the action-delay family, already scaffolded in the notebook. Compare
+first ablation is FDR with the action-latency parameter neutralized, including inside combined
+profiles. It is gated in the notebook and cannot run merely because the cell is executed. Compare
 it with a more reliable curriculum estimate (more than five episodes per profile, or uncertainty-
 aware weighting) and, if needed, a recurrent actor. Change one mechanism at a time. Communication
 and observation-noise ablations are secondary because current evidence points most strongly to

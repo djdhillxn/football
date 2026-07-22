@@ -17,6 +17,13 @@ def main():
     parser.add_argument("--baseline", choices=["random", "double_chase", "role_based"])
     parser.add_argument("--seed", type=int)
     parser.add_argument("--profile", default="nominal")
+    parser.add_argument("--scenario", choices=["nominal", "cooperation"], default="nominal")
+    parser.add_argument(
+        "--matched",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Record exactly the requested seeds instead of selecting outcomes from extra candidates.",
+    )
     args = parser.parse_args()
     if args.run_dir is None:
         if args.config is None or args.baseline is None:
@@ -29,18 +36,19 @@ def main():
         config_path = args.config or run_dir / "resolved_config.yaml"
         config = load_config(config_path)
     record_videos(
-        config,
-        run_dir,
-        args.simulator,
-        args.episodes,
-        args.checkpoint,
-        args.baseline,
-        args.seed,
-        True,
-        args.profile,
+        config=config,
+        run_dir=run_dir,
+        simulator=args.simulator,
+        episodes=args.episodes,
+        checkpoint=args.checkpoint,
+        baseline=args.baseline,
+        seed=args.seed,
+        deterministic=True,
+        profile=args.profile,
+        scenario=args.scenario,
+        matched=args.matched,
     )
 
 
 if __name__ == "__main__":
     main()
-

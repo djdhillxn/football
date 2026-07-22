@@ -94,7 +94,7 @@ Focused ablations use ordinary YAML-valued dot overrides:
 python -m scripts.train \
   --config configs/mappo_failure_dr.yaml \
   --run-name mappo_failure_no_action_delay \
-  'randomization.disabled_families=[action_delay]'
+  'randomization.disabled_parameters=[action_latency]'
 ```
 
 Other useful overrides include `experiment.seed=1`, `train.total_steps=2000000`, and
@@ -119,6 +119,9 @@ python -m scripts.evaluate --run-dir "$RUN_DIR" --checkpoint best \
   --simulator abstract --suite profiles
 python -m scripts.evaluate --run-dir "$RUN_DIR" --checkpoint best \
   --simulator pymunk --suite robustness
+python -m scripts.evaluate --run-dir "$RUN_DIR" --checkpoint best \
+  --simulator pymunk --suite cooperation --seed 250000 \
+  --prefix confirmatory_pymunk_cooperation
 ```
 
 Standard evaluation covers all three defender modes. Profile evaluation forces every configured
@@ -126,9 +129,21 @@ perturbation family. The robustness suite sweeps action delay against localizati
 long-form data, pivot tables, and Matplotlib heatmaps. Running abstract standard and Pymunk transfer
 evaluation for the same learned run also creates transfer-gap metrics.
 
-Reported metrics include return distribution, goal success, time to score, pass completion,
-possession, redundant chasing, collisions, invalid actions, worst-decile return/CVaR, profile
-minima, robustness area, bootstrap intervals, and cross-simulator gaps.
+The cooperation suite uses a mirrored pass-needed initial state: the carrier's direct goal lane is
+blocked while its teammate has an open forward lane. Reported counts distinguish opportunities,
+pass choices, valid attempts, completions, receiver possession, and post-pass goals. Other metrics
+include return distribution, success, time to score, possession, redundant chasing, collisions,
+invalid actions, worst-decile return/CVaR, profile minima, robustness area, bootstrap intervals,
+and canonical cross-simulator gaps.
+
+Audit delayed-action semantics and record policy-dependent matched traces with:
+
+```bash
+python -m scripts.audit_action_delay --config configs/base.yaml \
+  --output-dir runs/logs/phase2_protocol --maximum-latency 5
+python -m scripts.trace_action_delays --run-dir "$RUN_DIR" \
+  --simulator pymunk --delays 0 1 2 3 4 5 --seed 260000
+```
 
 ## Videos
 
@@ -137,6 +152,8 @@ python -m scripts.record_video --run-dir "$RUN_DIR" --checkpoint best \
   --simulator abstract --episodes 3
 python -m scripts.record_video --run-dir "$RUN_DIR" --checkpoint best \
   --simulator pymunk --episodes 3
+python -m scripts.record_video --run-dir "$RUN_DIR" --checkpoint best \
+  --simulator pymunk --episodes 3 --scenario cooperation --matched --seed 250000
 python -m scripts.record_video --config configs/base.yaml --baseline role_based \
   --simulator abstract --episodes 1
 ```
@@ -169,9 +186,10 @@ python -m scripts.compare_runs --phase final --export-report
 python -m scripts.compare_runs --runs runs/run_a runs/run_b runs/run_c --export-report
 ```
 
-Aggregation groups seeds by experiment name and creates comparison CSV/JSON, success and transfer
-plots, and `reports/generated_results.tex`. The checked-in generated-results file is deliberately a
-pending-results notice; it contains no fabricated numbers.
+Aggregation preserves the exact evaluation-suite name and training seed. It creates raw and
+suite-level CSV/JSON, canonical same-run abstract-intercept/Pymunk-transfer gaps, a seed-level
+replication gate, suite-specific plots, and `reports/generated_results.tex`. Transfer, profile,
+robustness, and cooperation suites are never pooled into one error bar.
 
 ### Colab, Google Drive, and Mac synchronization
 

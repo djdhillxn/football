@@ -260,8 +260,15 @@ class SoccerEnvBase(ParallelEnv):
                 selected = str(self.rng.choice(candidates, p=weights))
             else:
                 selected = str(self.rng.choice(candidates))
-        parameters = self._default_parameters()
+        default_parameters = self._default_parameters()
+        parameters = copy.deepcopy(default_parameters)
         parameters.update(sample_profile_parameters(profiles[selected], self.rng))
+        if options.get("apply_disabled_parameters", True):
+            for key in self.randomization_config.get("disabled_parameters", []):
+                if key not in default_parameters:
+                    raise ValueError("Unknown disabled randomization parameter: " + str(key))
+                parameters[key] = copy.deepcopy(default_parameters[key])
+        # Explicit evaluation/diagnostic settings are authoritative.
         parameters.update(copy.deepcopy(options.get("sampled_parameters", {})))
         maximum_delay = int(self.env_config.get("maximum_delay_steps", 8))
         for key in ["action_latency", "observation_latency", "communication_latency"]:
@@ -270,6 +277,7 @@ class SoccerEnvBase(ParallelEnv):
         return selected, parameters
 
     def reset(self, seed=None, options=None):
+        options = options or {}
         if seed is not None:
             self.seed_value = int(seed)
             self.rng = np.random.default_rng(self.seed_value)
@@ -313,10 +321,11 @@ class SoccerEnvBase(ParallelEnv):
             "heading": math.pi,
             "velocity": np.zeros(2, dtype=np.float64),
             "angular_velocity": 0.0,
-            "mode": (options or {}).get("defender_mode", self.opponent_config["mode"]),
+            "mode": options.get("defender_mode", self.opponent_config["mode"]),
         }
         if self.defender["mode"] not in DEFENDER_MODES:
             raise ValueError("Unknown defender mode: " + str(self.defender["mode"]))
+        self._apply_initial_state(options.get("initial_state"))
         self._defender_ball_history.append(self.ball["position"].copy())
         self._reset_queues()
         self._reset_physics()
@@ -345,6 +354,90 @@ class SoccerEnvBase(ParallelEnv):
             for agent in self.possible_agents
         }
         return copy.deepcopy(self._last_observations), infos
+
+    def _apply_initial_state(self, initial_state):
+        """Apply a validated evaluation-only initial state before physics is created."""
+        if initial_state is None:
+            return
+        if not isinstance(initial_state, dict):
+            raise TypeError("initial_state must be a mapping")
+
+        def vector(value, label):
+            array = np.asarray(value, dtype=np.float64)
+            if array.shape != (2,) or not np.all(np.isfinite(array)):
+                raise ValueError(label + " must be a finite two-vector")
+            return array
+
+        for agent, overrides in initial_state.get("players", {}).items():
+            if agent not in self.players:
+                raise ValueError("Unknown player in initial_state: " + str(agent))
+            if "position" in overrides:
+                self.players[agent]["position"] = vector(
+                    overrides["position"], "initial player position"
+                )
+            if "velocity" in overrides:
+                self.players[agent]["velocity"] = vector(
+                    overrides["velocity"], "initial player velocity"
+                )
+            if "heading" in overrides:
+                heading = float(overrides["heading"])
+                if not math.isfinite(heading):
+                    raise ValueError("initial player heading must be finite")
+                self.players[agent]["heading"] = angle_wrap(heading)
+
+        ball_overrides = initial_state.get("ball", {})
+        if "position" in ball_overrides:
+            self.ball["position"] = vector(ball_overrides["position"], "initial ball position")
+        if "velocity" in ball_overrides:
+            self.ball["velocity"] = vector(ball_overrides["velocity"], "initial ball velocity")
+        if "last_touch" in ball_overrides:
+            last_touch = ball_overrides["last_touch"]
+            if last_touch not in {*self.possible_agents, "defender", None}:
+                raise ValueError("invalid initial ball last_touch")
+            self.ball["last_touch"] = last_touch
+
+        defender_overrides = initial_state.get("defender", {})
+        if "position" in defender_overrides:
+            self.defender["position"] = vector(
+                defender_overrides["position"], "initial defender position"
+            )
+        if "velocity" in defender_overrides:
+            self.defender["velocity"] = vector(
+                defender_overrides["velocity"], "initial defender velocity"
+            )
+        if "heading" in defender_overrides:
+            heading = float(defender_overrides["heading"])
+            if not math.isfinite(heading):
+                raise ValueError("initial defender heading must be finite")
+            self.defender["heading"] = angle_wrap(heading)
+
+        half_length = self.env_config["field_length"] / 2.0
+        half_width = self.env_config["field_width"] / 2.0
+        radius = self.env_config["player_radius"]
+        for name, entity in [
+            *[(agent, self.players[agent]) for agent in self.possible_agents],
+            ("defender", self.defender),
+        ]:
+            x_value, y_value = entity["position"]
+            if not (-half_length + radius <= x_value <= half_length - radius):
+                raise ValueError(name + " initial x position is outside the playable field")
+            if not (-half_width + radius <= y_value <= half_width - radius):
+                raise ValueError(name + " initial y position is outside the playable field")
+        ball_x, ball_y = self.ball["position"]
+        if not (-half_length < ball_x < half_length and -half_width < ball_y < half_width):
+            raise ValueError("initial ball position must be inside the field")
+
+        entities = [self.players[agent]["position"] for agent in self.possible_agents]
+        entities.append(self.defender["position"])
+        minimum_player_distance = 2.0 * radius
+        for first in range(len(entities)):
+            for second in range(first + 1, len(entities)):
+                if np.linalg.norm(entities[first] - entities[second]) < minimum_player_distance:
+                    raise ValueError("initial player/defender bodies overlap")
+        minimum_ball_distance = radius + self.env_config["ball_radius"]
+        for entity in entities:
+            if np.linalg.norm(entity - self.ball["position"]) < minimum_ball_distance:
+                raise ValueError("initial player/defender body overlaps the ball")
 
     def _sample_initial_positions(self):
         half_length = self.env_config["field_length"] / 2.0
@@ -376,6 +469,9 @@ class SoccerEnvBase(ParallelEnv):
     def _reset_queues(self):
         action_latency = self.sampled_parameters["action_latency"]
         self.action_queues = {agent: [6] * action_latency for agent in self.possible_agents}
+        self.action_request_step_queues = {
+            agent: [None] * action_latency for agent in self.possible_agents
+        }
         communication_latency = self.sampled_parameters["communication_latency"]
         self.communication_queues = {}
         self.delivered_messages = {}
@@ -394,6 +490,11 @@ class SoccerEnvBase(ParallelEnv):
             "pass_attempts": 0,
             "completed_passes": 0,
             "intercepted_passes": 0,
+            "pass_opportunities": 0,
+            "pass_attempts_on_opportunity": 0,
+            "receiver_possessions_after_pass": 0,
+            "goals_after_completed_pass": 0,
+            "cooperative_probe_success": False,
             "possession_steps": 0,
             "possession_changes": 0,
             "attacker_collisions": 0,
@@ -446,6 +547,7 @@ class SoccerEnvBase(ParallelEnv):
             raise ValueError("Actions must be supplied for exactly the current agents")
         requested = {}
         applied = {}
+        applied_action_ages = {}
         for agent in acting_agents:
             action = int(actions[agent])
             if not self.action_space(agent).contains(action):
@@ -454,6 +556,20 @@ class SoccerEnvBase(ParallelEnv):
             queue = self.action_queues[agent]
             queue.append(action)
             applied[agent] = int(queue.pop(0))
+            request_steps = self.action_request_step_queues[agent]
+            request_steps.append(self.step_count)
+            applied_request_step = request_steps.pop(0)
+            applied_action_ages[agent] = (
+                None
+                if applied_request_step is None
+                else int(self.step_count - applied_request_step)
+            )
+
+        opportunity_carrier = self._pass_opportunity_carrier()
+        if opportunity_carrier is not None:
+            self.metrics["pass_opportunities"] += 1
+            if applied[opportunity_carrier] == 4:
+                self.metrics["pass_attempts_on_opportunity"] += 1
 
         previous_potential = self._potential_components()
         previous_positions = {agent: self.players[agent]["position"].copy() for agent in acting_agents}
@@ -514,6 +630,9 @@ class SoccerEnvBase(ParallelEnv):
                 self.metrics["time_to_score"] = (
                     self.step_count * self.env_config["dt"] * self.env_config["macro_action_repeat"]
                 )
+                if self.metrics["completed_passes"] > 0:
+                    self.metrics["goals_after_completed_pass"] += 1
+                    self.metrics["cooperative_probe_success"] = True
         rewards = {agent: shared_reward for agent in acting_agents}
         terminations = {agent: terminated for agent in acting_agents}
         truncations = {agent: truncated for agent in acting_agents}
@@ -527,6 +646,13 @@ class SoccerEnvBase(ParallelEnv):
                 "sampled_parameters": copy.deepcopy(self.sampled_parameters),
                 "requested_action": requested[agent],
                 "applied_action": applied[agent],
+                "applied_action_age_steps": applied_action_ages[agent],
+                "action_latency": int(self.sampled_parameters["action_latency"]),
+                "queued_actions": [int(value) for value in self.action_queues[agent]],
+                "queued_action_ages": [
+                    None if value is None else int(self.step_count - value)
+                    for value in self.action_request_step_queues[agent]
+                ],
             }
         # ParallelEnv emits the final observation for agents that terminate on this call.
         # This also gives time-limit bootstrapping code an explicit terminal transition.
@@ -737,12 +863,40 @@ class SoccerEnvBase(ParallelEnv):
             self._pass_pending["age"] += 1
             if possession == self._pass_pending["to"]:
                 self.metrics["completed_passes"] += 1
+                self.metrics["receiver_possessions_after_pass"] += 1
                 self._events["pass_reward"] += self.reward_config["successful_pass"]
                 self._pass_pending = None
             elif possession == "defender" or self._pass_pending["age"] > 18:
                 self.metrics["intercepted_passes"] += 1
                 self._events["pass_reward"] += self.reward_config["lost_pass"]
                 self._pass_pending = None
+
+    def _pass_opportunity_carrier(self):
+        """Return the carrier when a direct lane is blocked and a forward pass lane is open."""
+        carrier = self.ball.get("possession")
+        if carrier not in self.possible_agents:
+            return None
+        teammate = AGENTS[1 - AGENTS.index(carrier)]
+        ball_position = self.ball["position"]
+        teammate_position = self.players[teammate]["position"]
+        goal = np.array([self.env_config["field_length"] / 2.0, 0.0])
+        direct_block_distance = distance_to_segment(
+            self.defender["position"], ball_position, goal
+        )
+        pass_lane_distance = distance_to_segment(
+            self.defender["position"], ball_position, teammate_position
+        )
+        probe = self.config.get("evaluation", {}).get("cooperation_probe", {})
+        direct_threshold = float(probe.get("direct_lane_block_distance", 0.55))
+        pass_threshold = float(probe.get("open_pass_lane_distance", 0.65))
+        minimum_forward = float(probe.get("minimum_receiver_progress", 0.4))
+        if (
+            direct_block_distance <= direct_threshold
+            and pass_lane_distance >= pass_threshold
+            and teammate_position[0] >= ball_position[0] + minimum_forward
+        ):
+            return carrier
+        return None
 
     def _check_immediate_terminal(self):
         if not self._finite_state():
@@ -1258,6 +1412,7 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
         for agent in self.possible_agents:
             body = pymunk.Body(mass, moment)
             body.position = tuple(self.players[agent]["position"])
+            body.velocity = tuple(self.players[agent]["velocity"])
             body.angle = self.players[agent]["heading"]
             shape = pymunk.Circle(body, radius)
             shape.friction = self.transfer_config["player_friction"]
@@ -1268,6 +1423,7 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
             self.player_shapes[agent] = shape
         self.defender_body = pymunk.Body(mass, moment)
         self.defender_body.position = tuple(self.defender["position"])
+        self.defender_body.velocity = tuple(self.defender["velocity"])
         self.defender_body.angle = self.defender["heading"]
         self.defender_shape = pymunk.Circle(self.defender_body, radius)
         self.defender_shape.friction = self.transfer_config["player_friction"]
@@ -1279,6 +1435,7 @@ class PymunkSoccerTransferEnv(SoccerEnvBase):
         ball_moment = pymunk.moment_for_circle(ball_mass, 0.0, ball_radius)
         self.ball_body = pymunk.Body(ball_mass, ball_moment)
         self.ball_body.position = tuple(self.ball["position"])
+        self.ball_body.velocity = tuple(self.ball["velocity"])
         self.ball_shape = pymunk.Circle(self.ball_body, ball_radius)
         self.ball_shape.friction = self.transfer_config["ball_friction"]
         self.ball_shape.elasticity = self.sampled_parameters["ball_restitution"]

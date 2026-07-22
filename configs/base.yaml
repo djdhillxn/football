@@ -77,6 +77,8 @@ randomization:
   mode: none
   nominal_probability: 0.1
   disabled_families: []
+  # Parameter-level ablations also neutralize that parameter inside combined profiles.
+  disabled_parameters: []
   training_profiles: null
   # Each pair is a closed uniform range sampled once per episode.
   profiles:
@@ -271,6 +273,29 @@ evaluation:
     abstract_test: 130000
     transfer_test: 140000
     video: 50000
+    # Phase-2 pilot outcomes have now informed decisions. Keep these confirmation
+    # ranges untouched until the replication protocol and code are frozen.
+    confirmatory_abstract_test: 230000
+    confirmatory_transfer_test: 240000
+    confirmatory_profile_test: 241000
+    confirmatory_robustness_test: 242000
+    cooperation_probe: 250000
+    delay_audit: 260000
+  cooperation_probe:
+    episodes: 100
+    direct_lane_block_distance: 0.55
+    open_pass_lane_distance: 0.65
+    minimum_receiver_progress: 0.40
+    carrier_ball_distance: 0.33
+    receiver_forward_offset: 1.20
+    receiver_lateral_offset: 1.20
+    defender_forward_offset: 1.55
+    position_jitter: 0.08
+  replication_gate:
+    minimum_training_seeds: 3
+    required_direction_seeds: 2
+    maximum_grid_regression: 0.05
+    maximum_abstract_intercept_regression: 0.10
   phase1_gate:
     # These are launch safeguards, not claimed universal performance standards.
     maximum_random_pymunk_success: 0.50

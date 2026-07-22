@@ -18,6 +18,7 @@ from robosoccer.artifacts import (
     sync_run_to_drive,
 )
 from robosoccer.config import apply_overrides, load_config
+from robosoccer.diagnostics import audit_action_delay, expected_delayed_actions
 from robosoccer.environment import (
     AGENTS,
     AbstractSoccerEnv,
@@ -27,10 +28,15 @@ from robosoccer.environment import (
 )
 from robosoccer.evaluation import (
     add_group_success_statistics,
+    build_replication_summary,
+    canonical_transfer_rows,
+    cooperation_probe_initial_state,
     evaluate_baselines,
+    export_generated_results,
     flatten_episode_metrics,
     phase1_readiness_audit,
     record_videos,
+    suite_aggregate,
     summarize_episodes,
 )
 from robosoccer.training import (
@@ -237,6 +243,47 @@ def test_action_delay_queue(base_config):
         env.close()
 
 
+def test_action_delay_expected_fifo_and_production_audit(base_config, tmp_path):
+    assert expected_delayed_actions([0, 1, 2, 3], 2) == [6, 6, 0, 1]
+    result, trace = audit_action_delay(base_config, tmp_path, maximum_latency=2)
+    assert result["passed"] is True
+    assert result["case_count"] == 6
+    assert trace and all(row["passed"] for row in trace)
+    assert (tmp_path / "action_delay_audit.json").is_file()
+    assert (tmp_path / "action_delay_trace.csv").is_file()
+
+
+@pytest.mark.parametrize("environment_class", [AbstractSoccerEnv, PymunkSoccerTransferEnv])
+def test_cooperation_probe_is_pass_needed_and_deterministic(
+    base_config, environment_class
+):
+    first, first_metadata = cooperation_probe_initial_state(base_config, 250000)
+    second, second_metadata = cooperation_probe_initial_state(base_config, 250000)
+    assert first == second
+    assert first_metadata == second_metadata
+    env = environment_class(base_config)
+    try:
+        env.reset(
+            seed=250000,
+            options={
+                "initial_state": first,
+                "sampled_parameters": {"defender_speed_multiplier": 0.0},
+                "defender_mode": "intercept",
+            },
+        )
+        carrier = first_metadata["probe_carrier"]
+        assert env.ball["possession"] == carrier
+        assert env._pass_opportunity_carrier() == carrier
+        actions = {agent: 6 for agent in AGENTS}
+        actions[carrier] = 4
+        env.step(actions)
+        assert env.metrics["pass_opportunities"] == 1
+        assert env.metrics["pass_attempts_on_opportunity"] == 1
+        assert env.metrics["pass_attempts"] == 1
+    finally:
+        env.close()
+
+
 def test_observation_delay_queue(base_config):
     env = AbstractSoccerEnv(base_config)
     try:
@@ -272,6 +319,21 @@ def test_randomized_parameters_stay_in_profile_ranges(base_config):
         sampled = sample_profile_parameters(profile, rng)
         for key, bounds in profile["parameters"].items():
             assert bounds[0] <= sampled[key] <= bounds[1]
+
+
+def test_parameter_ablation_neutralizes_delay_inside_combined_profile(base_config):
+    config = copy.deepcopy(base_config)
+    config["randomization"]["mode"] = "uniform"
+    config["randomization"]["disabled_parameters"] = ["action_latency"]
+    env = AbstractSoccerEnv(config, profile_name="combined_severe")
+    try:
+        for seed in range(3):
+            env.reset(seed=seed)
+            assert env.selected_profile == "combined_severe"
+            assert env.sampled_parameters["action_latency"] == 0
+            assert env.sampled_parameters["localization_noise"] > 0.0
+    finally:
+        env.close()
 
 
 def test_failure_directed_probabilities_constraints(base_config):
@@ -393,6 +455,189 @@ def test_success_aggregation_distinguishes_profiles_and_defenders():
     rows[1]["profile"] = "delay"
     profile_summary = summarize_episodes(rows, bootstrap_samples=10, seed=0)
     assert profile_summary["minimum_profile_success_rate"] == pytest.approx(0.5)
+
+
+def test_cooperation_summary_reports_counts_and_opportunity_denominator():
+    rows = []
+    for attempted, completed, cooperative in [(1, 1, True), (0, 0, False)]:
+        rows.append(
+            {
+                "team_return": 1.0 if cooperative else 0.0,
+                "success": cooperative,
+                "time_to_score": 2.0 if cooperative else None,
+                "pass_attempts": attempted,
+                "completed_passes": completed,
+                "intercepted_passes": 0,
+                "pass_opportunities": 4,
+                "pass_attempts_on_opportunity": attempted,
+                "receiver_possessions_after_pass": completed,
+                "goals_after_completed_pass": int(cooperative),
+                "cooperative_probe_success": cooperative,
+                "possession_fraction": 0.5,
+                "redundant_chase_fraction": 0.0,
+                "invalid_action_fraction": 0.0,
+                "attacker_collisions": 0,
+                "termination_reason": "goal" if cooperative else "timeout",
+                "action_switches": 0,
+                "profile": "nominal",
+                "defender_mode": "intercept",
+            }
+        )
+    summary = summarize_episodes(rows, bootstrap_samples=10, seed=0)
+    assert summary["pass_opportunity_count"] == 8
+    assert summary["pass_attempts_on_opportunity_count"] == 1
+    assert summary["pass_opportunity_action_rate"] == pytest.approx(0.125)
+    assert summary["receiver_possession_after_pass_count"] == 1
+    assert summary["post_pass_goal_count"] == 1
+    assert summary["cooperative_success_rate"] == pytest.approx(0.5)
+
+
+def _synthetic_confirmation_rows(fdr_grid=0.48):
+    values = {
+        "mappo_nominal": (0.70, 0.50, 0.50, 0.10),
+        "mappo_uniform_dr": (0.60, 0.40, 0.42, 0.20),
+        "mappo_failure_dr": (0.65, 0.70, fdr_grid, 0.35),
+    }
+    rows = []
+    for method, metrics in values.items():
+        for training_seed in range(3):
+            jitter = training_seed * 0.005
+            for evaluation_name, simulator, suite, column, value in [
+                (
+                    "confirmatory_abstract_standard",
+                    "abstract",
+                    "standard",
+                    "canonical_success_rate",
+                    metrics[0] + jitter,
+                ),
+                (
+                    "confirmatory_pymunk_profiles",
+                    "pymunk",
+                    "profiles",
+                    "mean_profile_success_rate",
+                    metrics[1] + jitter,
+                ),
+                (
+                    "confirmatory_pymunk_robustness",
+                    "pymunk",
+                    "robustness",
+                    "normalized_area_under_robustness_curve",
+                    metrics[2] + jitter,
+                ),
+                (
+                    "confirmatory_pymunk_cooperation",
+                    "pymunk",
+                    "cooperation",
+                    "cooperative_success_rate",
+                    metrics[3] + jitter,
+                ),
+            ]:
+                row = {
+                    "run_dir": f"/{method}/{training_seed}",
+                    "method": method,
+                    "training_seed": training_seed,
+                    "evaluation_name": evaluation_name,
+                    "simulator": simulator,
+                    "suite": suite,
+                    "success_rate": value,
+                    "mean_return": value,
+                    "canonical_success_rate": value,
+                }
+                row[column] = value
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_suite_aggregation_never_pools_different_evaluations():
+    data = pd.DataFrame(
+        [
+            {
+                "method": "mappo_nominal",
+                "simulator": "pymunk",
+                "suite": "transfer",
+                "evaluation_name": "pymunk_transfer",
+                "training_seed": 0,
+                "success_rate": 0.2,
+                "mean_return": 0.1,
+            },
+            {
+                "method": "mappo_nominal",
+                "simulator": "pymunk",
+                "suite": "profiles",
+                "evaluation_name": "pymunk_profiles",
+                "training_seed": 0,
+                "success_rate": 0.8,
+                "mean_return": 0.7,
+            },
+        ]
+    )
+    aggregate = suite_aggregate(data)
+    assert len(aggregate) == 2
+    assert set(aggregate["success_rate_mean"]) == {0.2, 0.8}
+
+
+def test_canonical_transfer_gap_pairs_only_declared_suites():
+    data = pd.DataFrame(
+        [
+            {
+                "run_dir": "/run",
+                "method": "mappo_nominal",
+                "training_seed": 0,
+                "evaluation_name": "confirmatory_abstract_standard",
+                "canonical_success_rate": 0.7,
+            },
+            {
+                "run_dir": "/run",
+                "method": "mappo_nominal",
+                "training_seed": 0,
+                "evaluation_name": "confirmatory_pymunk_transfer",
+                "canonical_success_rate": 0.4,
+            },
+            {
+                "run_dir": "/run",
+                "method": "mappo_nominal",
+                "training_seed": 0,
+                "evaluation_name": "confirmatory_pymunk_profiles",
+                "canonical_success_rate": 0.9,
+            },
+        ]
+    )
+    paired = canonical_transfer_rows(data)
+    assert len(paired) == 1
+    assert paired.iloc[0]["transfer_gap_success"] == pytest.approx(0.3)
+
+
+def test_replication_gate_is_seed_aware_and_controls_delay_ablation(base_config):
+    passing = build_replication_summary(_synthetic_confirmation_rows(), base_config)
+    assert passing["complete_training_seed_counts"] == {
+        "mappo_nominal": 3,
+        "mappo_uniform_dr": 3,
+        "mappo_failure_dr": 3,
+    }
+    assert passing["confirmation_passed"] is True
+    assert passing["delay_ablation_authorized"] is False
+
+    delay_failure = build_replication_summary(
+        _synthetic_confirmation_rows(fdr_grid=0.35), base_config
+    )
+    assert delay_failure["confirmation_passed"] is False
+    assert delay_failure["delay_failure_replicated"] is True
+    assert delay_failure["delay_ablation_authorized"] is True
+
+
+def test_generated_results_are_seed_aware_and_suite_specific(
+    base_config, tmp_path, monkeypatch
+):
+    data = _synthetic_confirmation_rows()
+    replication = build_replication_summary(data, base_config)
+    monkeypatch.chdir(tmp_path)
+    destination = export_generated_results(data, "final", replication)
+    contents = destination.read_text(encoding="utf-8")
+    assert "Training seeds" in contents
+    assert "Cooperative success" in contents
+    assert "Suite-specific seed-level summaries" in contents
+    assert "\\label{tab:phase2-suite-results}" in contents
+    assert "\\label{tab:phase2-paired-results}" in contents
 
 
 def test_baseline_methods_use_paired_seeds(base_config, tmp_path):

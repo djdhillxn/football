@@ -12,7 +12,7 @@ def main():
     parser.add_argument("--simulator", choices=["abstract", "pymunk", "webots"], default="abstract")
     parser.add_argument(
         "--suite",
-        choices=["standard", "transfer", "profiles", "robustness", "all"],
+        choices=["standard", "transfer", "profiles", "robustness", "cooperation", "all"],
         default="standard",
     )
     parser.add_argument("--episodes", type=int)
@@ -40,4 +40,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

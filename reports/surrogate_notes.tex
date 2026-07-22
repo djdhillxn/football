@@ -261,26 +261,31 @@ examples and contain no evidence of a learned passing sequence. Nominal and unif
 contain only render-check images, so a fair behavioral comparison still needs matched same-seed
 videos for all methods.
 
-\section{Comparison/export defect}
-The comparison-row collector retains each suite, but the LaTeX exporter and method-comparison
-plotter group by only \texttt{method, simulator}. This averages transfer,
-profiles, robustness, historical Phase 1 rows, and duplicate runs. The plotted standard deviation
-is variation across unlike suites, not uncertainty over seeds. The transfer-gap pivot likewise
-averages all Pymunk suites and can produce a value different from the canonical matched gap.
-The method-success plot, transfer-gap plot, and old generated LaTeX
-table must not be used as evidence. Episode files and suite summaries remain usable.
+\section{Comparison/export defect and repair}
+The pilot comparison-row collector retained each suite, but its LaTeX exporter and plotter grouped
+by only \texttt{method, simulator}. That mixed transfer, profile, robustness, historical Phase 1,
+and duplicate-run rows. The defect affected presentation, not the underlying episode files. The
+new comparison path carries \texttt{evaluation\_name}, training seed, and source run; aggregates
+only within an exact suite; deduplicates manifests; and pairs canonical abstract-intercept and
+Pymunk-transfer rows from the same run. It emits raw, suite-level, canonical-gap, and seed-level
+replication CSV/JSON files. Automated tests guard both suite isolation and canonical pairing.
 
 \section{Ranked execution backlog and stop rules}
+All P0 infrastructure and the conditional execution logic below are now implemented in the
+cleaned Phase 2 notebook. Local validation passes all 54 tests. The isolated production delay
+audit passes all 12 simulator/latency cases (two simulators times latencies 0--5); policy-dependent
+matched traces still require the Drive checkpoints in Colab. P1 training and evaluation remain to
+be executed by running the notebook cells in order.
 \begin{longtable}{p{0.48in}p{1.60in}p{3.80in}}
 \toprule Priority & Work item & Required output / decision \\
 \midrule
-P0.1 & Delay trace audit & Unit tests and per-step chosen/queued/executed action traces for delays
+P0.1 & Delay trace audit & Implemented unit tests and per-step chosen/queued/executed action traces for delays
 0--5, macro repeat, and reset. Explain or fix nominal's improvement with delay before training. \\
-P0.2 & Suite-safe reporting & Group by suite; canonical transfer gap only; pass counts and
+P0.2 & Suite-safe reporting & Implemented exact-suite grouping; canonical transfer gap only; pass counts and
 denominators; automated regression test; retire mixed aggregate plots. \\
-P0.3 & Fresh confirmation seeds & Mark 130k/140k exploratory and reserve untouched abstract and
+P0.3 & Fresh confirmation seeds & 130k/140k marked exploratory; untouched abstract and
 Pymunk ranges before any tuning. Store the protocol with the run manifest. \\
-P0.4 & Cooperation probe & A blocked-shot/pass-needed scenario with opportunity, attempt,
+P0.4 & Cooperation probe & Implemented mirrored blocked-shot/pass-needed scenarios with opportunity, attempt,
 completion, receiver-possession, and post-pass-goal metrics; matched videos for all actors. \\
 P1.1 & Replicate main effect & Train seeds 1 and 2 for all three methods: six new jobs. Report
 per-seed values and seed-aware intervals, not only pooled episodes. \\
@@ -288,7 +293,8 @@ P1.2 & Predeclared gate & FDR must beat both controls on 18-profile Pymunk mean,
 0.05 below nominal grid AUC, and be no more than 0.10 below nominal abstract-intercept success. \\
 P1.3 & Escalation rule & If direction holds in at least two of three seeds, expand to five seeds.
 Otherwise stop broad runs and diagnose/report the negative result. \\
-P1.4 & Targeted ablation & Run no-action-delay FDR first. Compare noisier five-episode curriculum
+P1.4 & Targeted ablation & Conditionally run FDR with action latency neutralized in every training
+profile, including combined profiles. Compare noisy five-episode curriculum
 updates with a better-estimated or uncertainty-aware alternative. Consider recurrence only if
 delay semantics are correct and memory remains the likely bottleneck. \\
 P2 & Story package & Suite-specific plots, per-seed intervals, failure taxonomy, matched videos,
@@ -304,7 +310,7 @@ replication, full-game/self-play expansion, and any physical sim-to-real wording
 
 \section{Reproducibility checklist for the next run}
 \begin{itemize}
-\item Freeze a clean commit, resolved YAML, six training commands, and new evaluation seed ranges.
+\item Run from a clean commit; the resolved YAML, six training commands, and evaluation seed ranges are frozen.
 \item Run formatting/tests, both simulator API checks, a delay-trace regression, and smoke training.
 \item Preserve checkpoints in Drive; sync logs/configs/JSON/CSV/plots/videos to the Mac.
 \item Save completed and failed runs immediately in each training/evaluation cell.
