@@ -957,7 +957,6 @@ def export_generated_results(data, phase):
 
 
 def compare_runs(run_paths=None, phase="final", runs_root="runs", export_report=False):
-    setup_logging(None)
     if run_paths:
         paths = [Path(path) for path in run_paths]
     else:
@@ -971,6 +970,7 @@ def compare_runs(run_paths=None, phase="final", runs_root="runs", export_report=
     data = pd.DataFrame(rows)
     output_dir = Path(runs_root) / "comparisons" / (datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + phase)
     output_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(output_dir, filename="comparison.log")
     if data.empty:
         pd.DataFrame(columns=["method", "simulator", "success_rate", "mean_return"]).to_csv(
             output_dir / "main_comparison.csv", index=False

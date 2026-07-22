@@ -109,17 +109,19 @@ The following entries are Phase 1 diagnostics, not final comparative rows.
 2026-07-21 & repair calibration & working tree & base; 100 each & 30k/40k & mechanics and gate calibration & exclude from final evidence \\
 2026-07-21 & repaired baselines & working tree & base; 100 each & 130k/140k & abstract 0.03--0.28; Pymunk 0.49--0.68 & baseline gate passes \\
 2026-07-21 & frozen IPPO audit & working tree & best actor; no update & 130k/140k & abstract intercept 0.88; Pymunk 0.43 & conditional Phase 2 go \\
+2026-07-21 & clean baselines & 16c94cd & base; 100 each & 130k/140k & abstract 0.03--0.28; Pymunk 0.49--0.68 & baseline gate passes \\
+2026-07-21 & clean IPPO nominal & 16c94cd & IPPO; 2.0M steps & 0 & intercept 0.87; Pymunk 0.34 & Phase 2 gate passes; transfer fails \\
 \bottomrule
 \end{longtable}
 \endgroup
 
 \section{Hyperparameter attempts}
 Record each deviation from the checked-in defaults, the validation evidence motivating it, and
-whether the choice was made before final-test evaluation. The Phase 1 nominal IPPO run used the
-checked-in defaults; no policy hyperparameter selection was performed after its test. Its selected checkpoint
-occurred at 1,810,432 environment steps with validation success 0.825 over 40 fixed validation
-episodes. The final checkpoint at 2,007,040 steps scored 0.750 on the same-size validation batch,
-so the selection rule correctly retained the earlier checkpoint.
+whether the choice was made before final-test evaluation. The clean Phase 1 nominal IPPO run used
+the checked-in defaults; no policy hyperparameter selection was performed after its test. Its
+selected checkpoint occurred at 1,277,952 environment steps with validation success 0.975 over 40
+fixed validation episodes. The final validation at 2,007,040 steps scored 0.950 on the same-size
+batch, so the selection rule correctly retained the earlier checkpoint.
 
 The transfer adapter's explicit ball-drag multiplier is 0.78. This benchmark calibration was made
 after diagnosing the original reflective-boundary and global-damping defects using the retired
@@ -172,6 +174,11 @@ reproduces nominal abstract learning at 0.88 against intercept, but its Pymunk s
 versus random's 0.49 (two-sided exact paired $p=0.519$). This negative transfer result is valid and
 motivates Phase 2; it is not evidence of physical transfer.
 
+The clean coherent rerun is stricter evidence. Its actor reaches 0.87 success against abstract
+intercept but only 0.34 in Pymunk. Against paired random outcomes on the same 140k seeds, the counts
+are 18 both-success, 35 both-failure, 16 IPPO-only, and 31 random-only; the two-sided exact paired
+test gives $p=0.040$. The fresh nominal actor therefore transfers worse than random in this suite.
+
 \section{Discarded ideas}
 Version one intentionally excludes image observations, joint-level locomotion learning, full 5v5
 play, self-play, learned opponents, RNNs, ROS, and physical-deployment claims. Each would add an
@@ -186,14 +193,14 @@ before changing that status.
 \section{Known limitations}
 Skill adapters encode task knowledge; the defender is scripted; synchronous collection may limit
 throughput; feed-forward actors infer delay only through short observation history; Pymunk remains
-a simple planar world; and robustness profiles cannot span unmodeled hardware failures. The frozen
-Phase 1 checkpoint generalizes poorly across opponent modes (0.10 against chase-ball versus 0.88
+a simple planar world; and robustness profiles cannot span unmodeled hardware failures. The clean
+Phase 1 checkpoint generalizes poorly across opponent modes (0.05 against chase-ball versus 0.87
 against its trained intercept defender), produces no valid passes in the held-out diagnostic, and
-does not exceed random Pymunk success (0.43 versus 0.49). The repaired benchmark is policy-sensitive,
+falls below random Pymunk success (0.34 versus 0.49). The repaired benchmark is policy-sensitive,
 so these are method limitations rather than reasons to modify the test again.
 
 \section{Phase 2 entry gate}
-The repaired code and held-out diagnostic satisfy the gate, yielding a conditional go. The gate
+The clean post-repair run satisfies the gate, yielding a go. The gate
 requires all of the following and is recomputed by both notebooks.
 \begin{itemize}
 \item Six complete 100-episode scripted method/simulator cells and bounded fraction metrics.
@@ -205,10 +212,24 @@ and nominal IPPO intercept success of at least 0.50 and above every scripted abs
 required to be high; a weak nominal transfer result is the motivation for robustness training.
 \end{itemize}
 
-Before spending Phase 2 compute, run the revised Phase 1 notebook once from a clean post-repair
-commit and require its \texttt{eval/phase1\_readiness.json} to report
-\texttt{phase2\_ready: true}. This final condition gives the fresh actor, configuration, commit,
-and all evaluations one coherent provenance record.
+The revised Phase 1 notebook has now run from clean commit \texttt{16c94cd}, and its
+\texttt{eval/phase1\_readiness.json} reports \texttt{phase2\_ready: true}. The fresh actor,
+configuration, commit, and all evaluations therefore have one coherent provenance record. This
+gate permits Phase 2 experimentation; it does not imply that nominal transfer is satisfactory.
+
+\section{Phase 2 execution and artifact status}
+The notebook output records completed 2,007,040-step nominal and uniform-DR MAPPO training
+processes, ending with rolling training success 0.68 and 0.28 respectively. These are training
+diagnostics only: neither run has a frozen abstract/Pymunk evaluation in the notebook. Their run
+directories are also absent from the downloaded Drive bundle inspected for this report, so they
+must not enter comparisons unless the new Drive pull recovers their metadata and checkpoints.
+
+The failure-directed MAPPO cell lost its remote Jupyter connection near update 140 of 245 and has
+no completion line in the preserved output. Treat it as incomplete unless a pulled
+\texttt{run\_metadata.json} says otherwise. The notebooks now save each complete or failed run in
+the same cell as training, re-save runs after evaluation and video generation, and retain the final
+workspace sync only as a safety net. If Drive does not contain the two completed MAPPO directories,
+rerun them; notebook stdout alone is not a resumable or auditable experiment artifact.
 
 \section{Future physical-robot deployment plan}
 First validate TorchScript observation parity in a supervised simulator. Then integrate a tested

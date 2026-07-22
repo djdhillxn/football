@@ -173,6 +173,90 @@ Aggregation groups seeds by experiment name and creates comparison CSV/JSON, suc
 plots, and `reports/generated_results.tex`. The checked-in generated-results file is deliberately a
 pending-results notice; it contains no fabricated numbers.
 
+### Colab, Google Drive, and Mac synchronization
+
+Code stays in Git, while finished experiment artifacts use one persistent Drive project:
+
+```text
+/content/robot-soccer-transfer/runs ──full immediate push──> MyDrive/RobotSoccerTransfer/runs
+             ^                                                        |
+             |                                                        |
+             +────────── full Colab restore ─────────────────────────+
+                                                                      |
+                       analysis-only Mac pull <───────────────────────+
+                                  |
+                                  +──> <football checkout>/runs
+
+MyDrive/RobotSoccerTransfer/reports ───────────────> <football checkout>/reports
+```
+
+Both notebooks explicitly pull the complete artifact workspace, including checkpoints needed for
+evaluation and resume, immediately after initialization. Every training cell then saves its newly
+completed run before the cell finishes. Failed runs are also
+saved after their metadata reaches `failed`, so their detailed logs survive for diagnosis.
+Evaluation and video cells re-save the modified run, while comparison and report-build cells save
+their outputs in the same cell. The final notebook sync remains a safety net, not a required step.
+
+With Google Drive for desktop running on macOS, merge Drive artifacts directly into this checkout
+with:
+
+```bash
+python -m scripts.sync_drive_artifacts
+```
+
+The command auto-detects a single
+`~/Library/CloudStorage/GoogleDrive-*/My Drive/RobotSoccerTransfer` folder. It can be pointed at a
+specific location when Drive uses another account or the folder has not been auto-detected:
+
+```bash
+python -m scripts.sync_drive_artifacts pull \
+  --drive-project "/path/to/My Drive/RobotSoccerTransfer"
+```
+
+`ROBOSOCCER_DRIVE_PROJECT` provides the same override. Use `--dry-run` to preview a pull. The Mac
+default is an analysis-only, non-destructive merge: it keeps configurations, metadata, JSON/CSV,
+training and TensorBoard logs, plots, and videos, while pruning `models/` and `checkpoints/` from
+the Drive traversal and skipping `.pt`, `.pth`, `.ts`, `.ckpt`, `.pkl`, `.pickle`, and `.zip`
+payloads.
+Those files remain safely on Drive and Colab-to-Drive saves are always full. The pull preserves
+local-only artifacts, skips `running` runs by default, restores comparisons and manual videos, and
+rebuilds local `latest_*.txt` pointers and the manifest from metadata. Authored report sources
+(`main.tex`, `surrogate_notes.tex`, and `references.bib`) remain Git-controlled and cannot be
+overwritten by an older Drive copy;
+generated LaTeX, figures, and PDFs are synchronized into root `reports/`.
+Generated report artifacts use a newest-file-wins rule so an older Drive report cannot replace a
+newer local build (and a stale Colab checkout cannot replace a newer Drive result).
+
+The first pull walks only lightweight trees; subsequent pulls also use a local run-signature cache
+and up to eight parallel copies. To remove heavyweight artifacts downloaded before this policy,
+without changing Drive, run:
+
+```bash
+python -m scripts.sync_drive_artifacts pull --prune-local-training-artifacts
+```
+
+An explicit full local restore remains available when local model execution is genuinely needed:
+
+```bash
+python -m scripts.sync_drive_artifacts pull --include-training-artifacts
+```
+
+The notebook helpers use the same implementation. The equivalent explicit commands are:
+
+```bash
+python -m scripts.sync_drive_artifacts push-run --run-dir runs/<finished-run>
+python -m scripts.sync_drive_artifacts push-all
+```
+
+`push-run` accepts only `complete` or `failed` metadata, copies metadata last, and writes portable
+Drive pointers such as `runs/<run-directory>`. Pulls use the immutable-run convention and compare
+existing files by size; analysis-only pulls never descend into checkpoint/model directories.
+Pushes content-check mutable text before updating Drive. Use `--verify-text` on a pull when an
+existing text artifact may have been rewritten in place; this stricter audit can be slower because
+Drive must hydrate those files.
+Sync activity is recorded in `runs/logs/artifact_sync.log`, in addition to each experiment's own
+training, evaluation, video, CSV, and TensorBoard logs.
+
 ## Experiment matrix
 
 | Method | Critic | Training distribution | Required role |
@@ -197,8 +281,8 @@ The two notebooks are command dashboards rather than hidden implementations:
   comparison, reports, and Drive sync. It recomputes the Phase-1 audit before allowing training.
 
 They keep the repository under `/content`, use Drive only for persistent artifacts, refuse to pull
-over a dirty checkout, restore runs through latest pointers, and allow later experiment sections to
-run after initialization without replaying earlier cells.
+over a dirty checkout, restore the complete artifact workspace, and allow later experiment sections
+to run after initialization without replaying earlier cells.
 
 ## Reports
 

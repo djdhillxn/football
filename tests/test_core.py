@@ -3,6 +3,7 @@
 import copy
 import csv
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,11 @@ import pytest
 import torch
 from pettingzoo.test import parallel_api_test
 
+from robosoccer.artifacts import (
+    prune_local_training_artifacts,
+    sync_artifacts_from_drive,
+    sync_run_to_drive,
+)
 from robosoccer.config import apply_overrides, load_config
 from robosoccer.environment import (
     AGENTS,
@@ -614,3 +620,187 @@ def test_run_pointer_created(base_config, tmp_path):
     pointer = Path(config["experiment"]["output_dir"]) / "latest_test_smoke.txt"
     assert pointer.is_file()
     assert Path(pointer.read_text(encoding="utf-8").strip()) == run_dir
+
+
+def write_test_run(run_dir, experiment_name, status):
+    run_dir.mkdir(parents=True)
+    metadata = {
+        "status": status,
+        "experiment_name": experiment_name,
+        "algorithm": "mappo",
+        "seed": 0,
+        "run_directory": str(run_dir),
+    }
+    (run_dir / "run_metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    (run_dir / "logs").mkdir()
+    (run_dir / "logs" / "train.log").write_text(f"{status}\n", encoding="utf-8")
+    return metadata
+
+
+def test_drive_pull_merges_finished_runs_and_generated_artifacts(tmp_path):
+    drive_project = tmp_path / "drive" / "RobotSoccerTransfer"
+    drive_runs = drive_project / "runs"
+    complete_run = drive_runs / "20260101_000001_alpha_mappo_seed0"
+    write_test_run(complete_run, "alpha", "complete")
+    (complete_run / "models").mkdir()
+    (complete_run / "models" / "final_actor.pt").write_bytes(b"model")
+    (complete_run / "checkpoints").mkdir()
+    (complete_run / "checkpoints" / "checkpoint.ckpt").write_bytes(b"checkpoint")
+    (complete_run / "exported_actor.pth").write_bytes(b"weights")
+    (complete_run / "replay.pkl").write_bytes(b"replay")
+    (complete_run / "logs" / "events.out.tfevents.test").write_bytes(b"tensorboard")
+    (complete_run / "resolved_config.yaml").write_text("seed: 0\n", encoding="utf-8")
+    (complete_run / "metrics.json").write_text("{}", encoding="utf-8")
+    (complete_run / "plots").mkdir()
+    (complete_run / "plots" / "curve.png").write_bytes(b"plot")
+    (complete_run / "videos").mkdir()
+    (complete_run / "videos" / "episode.mp4").write_bytes(b"video")
+    write_test_run(drive_runs / "20260101_000002_failed_mappo_seed0", "failed", "failed")
+    write_test_run(drive_runs / "20260101_000003_running_mappo_seed0", "running", "running")
+    (drive_runs / "orphan_weights.pt").write_bytes(b"orphan")
+    (drive_runs / "invalid_folder").mkdir(parents=True)
+    comparison = drive_project / "comparisons" / "comparison_a"
+    comparison.mkdir(parents=True)
+    (comparison / "summary.json").write_text("{}", encoding="utf-8")
+    reports = drive_project / "reports"
+    reports.mkdir()
+    (reports / "main.tex").write_text("stale source", encoding="utf-8")
+    (reports / "generated_results.tex").write_text("stale generated", encoding="utf-8")
+    os.utime(reports / "generated_results.tex", (1, 1))
+
+    repository = tmp_path / "repository"
+    (repository / "reports").mkdir(parents=True)
+    (repository / "reports" / "main.tex").write_text("authoritative", encoding="utf-8")
+    (repository / "reports" / "generated_results.tex").write_text(
+        "newer generated", encoding="utf-8"
+    )
+    os.utime(repository / "reports" / "generated_results.tex", (2, 2))
+    result = sync_artifacts_from_drive(drive_project, repository)
+
+    local_runs = repository / "runs"
+    assert (local_runs / "20260101_000001_alpha_mappo_seed0" / "logs" / "train.log").is_file()
+    local_complete = local_runs / "20260101_000001_alpha_mappo_seed0"
+    assert not (local_complete / "models").exists()
+    assert not (local_complete / "checkpoints").exists()
+    assert not (local_complete / "exported_actor.pth").exists()
+    assert not (local_complete / "replay.pkl").exists()
+    assert (local_complete / "logs" / "events.out.tfevents.test").is_file()
+    assert (local_complete / "resolved_config.yaml").is_file()
+    assert (local_complete / "metrics.json").is_file()
+    assert (local_complete / "plots" / "curve.png").is_file()
+    assert (local_complete / "videos" / "episode.mp4").is_file()
+    assert (local_runs / "20260101_000002_failed_mappo_seed0" / "logs" / "train.log").is_file()
+    assert not (local_runs / "20260101_000003_running_mappo_seed0").exists()
+    assert not (local_runs / "orphan_weights.pt").exists()
+    assert (local_runs / "comparisons" / "comparison_a" / "summary.json").is_file()
+    assert (repository / "reports" / "main.tex").read_text(encoding="utf-8") == "authoritative"
+    assert (repository / "reports" / "generated_results.tex").read_text(
+        encoding="utf-8"
+    ) == "newer generated"
+    pointer = Path((local_runs / "latest_alpha.txt").read_text(encoding="utf-8").strip())
+    assert pointer == (local_runs / "20260101_000001_alpha_mappo_seed0").resolve()
+    manifest = (local_runs / "experiment_manifest.jsonl").read_text(encoding="utf-8")
+    assert '"status": "complete"' in manifest
+    assert '"status": "failed"' in manifest
+    assert result["skipped_running"] == ["20260101_000003_running_mappo_seed0"]
+    assert result["skipped_invalid"] == ["invalid_folder"]
+    assert result["training_artifacts_included"] is False
+
+    cached = sync_artifacts_from_drive(drive_project, repository)
+    assert "20260101_000001_alpha_mappo_seed0" in cached["skipped_unchanged"]
+
+
+def test_drive_pull_can_restore_full_training_artifacts_for_colab(tmp_path):
+    drive_project = tmp_path / "drive" / "RobotSoccerTransfer"
+    run_dir = drive_project / "runs" / "20260101_000001_alpha_mappo_seed0"
+    write_test_run(run_dir, "alpha", "complete")
+    (run_dir / "models").mkdir()
+    (run_dir / "models" / "final_actor.pt").write_bytes(b"model")
+    (run_dir / "checkpoints").mkdir()
+    (run_dir / "checkpoints" / "checkpoint.ckpt").write_bytes(b"checkpoint")
+    (run_dir / "replay.pkl").write_bytes(b"replay")
+
+    repository = tmp_path / "repository"
+    result = sync_artifacts_from_drive(
+        drive_project,
+        repository,
+        include_training_artifacts=True,
+    )
+
+    local_run = repository / "runs" / run_dir.name
+    assert (local_run / "models" / "final_actor.pt").is_file()
+    assert (local_run / "checkpoints" / "checkpoint.ckpt").is_file()
+    assert (local_run / "replay.pkl").is_file()
+    assert result["training_artifacts_included"] is True
+
+    prune_local_training_artifacts(repository / "runs")
+    restored = sync_artifacts_from_drive(
+        drive_project,
+        repository,
+        include_training_artifacts=True,
+    )
+    assert run_dir.name not in restored["skipped_unchanged"]
+    assert (local_run / "models" / "final_actor.pt").is_file()
+    assert (local_run / "checkpoints" / "checkpoint.ckpt").is_file()
+
+
+def test_prune_local_training_artifacts_preserves_analysis_files(tmp_path):
+    local_runs = tmp_path / "runs"
+    run_dir = local_runs / "20260101_000001_alpha_mappo_seed0"
+    write_test_run(run_dir, "alpha", "complete")
+    (run_dir / "models").mkdir()
+    (run_dir / "models" / "final_actor.pt").write_bytes(b"model")
+    (run_dir / "checkpoints").mkdir()
+    (run_dir / "checkpoints" / "checkpoint.pth").write_bytes(b"checkpoint")
+    (run_dir / "replay.pkl").write_bytes(b"replay")
+    (local_runs / "orphan_weights.pt").write_bytes(b"orphan")
+    (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+    (run_dir / "videos").mkdir()
+    (run_dir / "videos" / "episode.mp4").write_bytes(b"video")
+
+    preview = prune_local_training_artifacts(local_runs, dry_run=True)
+    assert preview == {
+        "removed_directories": 2,
+        "removed_files": 4,
+        "reclaimed_bytes": 27,
+    }
+    assert (run_dir / "models" / "final_actor.pt").is_file()
+
+    result = prune_local_training_artifacts(local_runs)
+    assert result == preview
+    assert not (run_dir / "models").exists()
+    assert not (run_dir / "checkpoints").exists()
+    assert not (run_dir / "replay.pkl").exists()
+    assert not (local_runs / "orphan_weights.pt").exists()
+    assert (run_dir / "logs" / "train.log").is_file()
+    assert (run_dir / "metrics.json").is_file()
+    assert (run_dir / "videos" / "episode.mp4").is_file()
+
+
+def test_drive_push_writes_portable_pointer_and_refreshes_same_size_metadata(tmp_path):
+    drive_project = tmp_path / "drive" / "RobotSoccerTransfer"
+    drive_project.mkdir(parents=True)
+    run_dir = tmp_path / "runs" / "20260101_000001_alpha_mappo_seed0"
+    metadata = write_test_run(run_dir, "alpha", "complete")
+
+    sync_run_to_drive(run_dir, drive_project)
+    destination = drive_project / "runs" / run_dir.name
+    assert (drive_project / "runs" / "latest_alpha.txt").read_text(encoding="utf-8") == (
+        f"runs/{run_dir.name}\n"
+    )
+
+    metadata["experiment_name"] = "bravo"
+    (run_dir / "run_metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    sync_run_to_drive(run_dir, drive_project)
+    persisted = json.loads((destination / "run_metadata.json").read_text(encoding="utf-8"))
+    assert persisted["experiment_name"] == "bravo"
+    assert (drive_project / "runs" / "latest_bravo.txt").is_file()
+
+
+def test_drive_push_rejects_running_run(tmp_path):
+    drive_project = tmp_path / "drive" / "RobotSoccerTransfer"
+    drive_project.mkdir(parents=True)
+    run_dir = tmp_path / "runs" / "20260101_000001_running_mappo_seed0"
+    write_test_run(run_dir, "running", "running")
+    with pytest.raises(RuntimeError, match="unfinished run"):
+        sync_run_to_drive(run_dir, drive_project)
