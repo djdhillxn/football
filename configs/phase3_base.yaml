@@ -1,0 +1,188 @@
+inherits: base.yaml
+
+experiment:
+  name: phase3_base
+  seed: 3
+
+phase3:
+  enabled: true
+  development_seed: 3
+  final_confirmation_seeds: [4, 5, 6]
+  maximum_attackers: 3
+  maximum_defenders: 3
+  observation_padding: 27
+  state_padding: 43
+  require_calibration: true
+  calibration_summary: null
+  schema_version: 1
+  scenario: phase3_2v2_open
+  scenario_mixture:
+    - phase3_2v2_open
+    - phase3_2v2_pass_required
+    - phase3_3v2_open
+    - phase3_3v2_press
+  scenario_probabilities: [0.30, 0.30, 0.25, 0.15]
+  defender_style: mixed
+  mixed_defender_styles: [lane_block, press, predictive, zonal]
+  mixed_defender_probabilities: [0.30, 0.25, 0.20, 0.25]
+  defender_speed: 1.15
+  defender_acceleration: 2.4
+  defender_turn_rate: 2.5
+  start_jitter: 0.18
+  capture_distance: 0.42
+  capture_speed: 3.0
+  pass_lane_clearance: 0.32
+  minimum_reception_advance: 0.20
+  reception_window_steps: 18
+  cooperative_horizon_steps: 24
+  max_episode_steps: 150
+  minimum_goal_seconds: 8.0
+  match_mode: false
+  match_seconds: 50.0
+  restart_pause_steps: 2
+  profiles:
+    nominal: {}
+    delay_low: {action_latency: [1, 1]}
+    delay_high: {action_latency: [2, 4]}
+    localization: {localization_noise: [0.03, 0.10]}
+    movement_slow: {speed_multiplier: [0.72, 0.90]}
+    kick_weak: {kick_multiplier: [0.68, 0.86]}
+    ball_fast: {ball_drag_multiplier: [0.55, 0.78]}
+    observation:
+      observation_latency: [1, 3]
+      missed_ball_probability: [0.05, 0.20]
+      missed_defender_probability: [0.05, 0.15]
+    communication:
+      communication_latency: [1, 3]
+      packet_loss: [0.20, 0.55]
+    combined:
+      action_latency: [1, 3]
+      observation_latency: [1, 2]
+      communication_latency: [1, 2]
+      missed_ball_probability: [0.03, 0.12]
+      missed_defender_probability: [0.03, 0.10]
+      localization_noise: [0.03, 0.09]
+      speed_multiplier: [0.75, 0.92]
+      kick_multiplier: [0.75, 0.95]
+  calibration:
+    episodes_per_cell: 100
+    smoke_episodes: 20
+    random_max: 0.05
+    double_chase_max: 0.20
+    role_min: 0.20
+    role_max: 0.55
+    role_random_margin: 0.15
+    direct_shot_max: 0.05
+    minimum_median_success_time: 8.0
+    saturation_max: 0.85
+  recurrent:
+    hidden_size: 256
+    sequence_length: 32
+    burn_in_steps: 4
+    recurrent_critic: true
+  stages:
+    stage_a:
+      target_steps: 500000
+      match_mode: false
+      scenarios: [phase3_2v2_open]
+      probabilities: [1.0]
+    stage_b:
+      target_steps: 1000000
+      match_mode: true
+      scenarios: [phase3_2v2_open, phase3_2v2_pass_required]
+      probabilities: [0.35, 0.65]
+    stage_c:
+      target_steps: 1500000
+      match_mode: true
+      scenarios: [phase3_2v2_open, phase3_2v2_pass_required, phase3_3v2_open]
+      probabilities: [0.25, 0.35, 0.40]
+    stage_d:
+      target_steps: 2000000
+      match_mode: true
+      scenarios:
+        - phase3_2v2_open
+        - phase3_2v2_pass_required
+        - phase3_3v2_open
+        - phase3_3v2_press
+      probabilities: [0.20, 0.30, 0.25, 0.25]
+  active_stage: stage_a
+  mode: nominal
+  cc_fdr:
+    nominal_rehearsal_minimum: 0.35
+    nominal_rehearsal_initial: 0.40
+    nominal_rehearsal_maximum: 0.75
+    cooperation_probability: 0.20
+    nominal_scenarios: [phase3_2v2_open, phase3_3v2_open]
+    nominal_scenario_probabilities: [0.55, 0.45]
+    robustness_scenarios:
+      - phase3_2v2_open
+      - phase3_2v2_pass_required
+      - phase3_3v2_open
+      - phase3_3v2_press
+    robustness_scenario_probabilities: [0.20, 0.25, 0.25, 0.30]
+    nominal_rehearsal_increment: 0.10
+    nominal_regression_margin: 0.10
+    ema_decay: 0.60
+    failure_exponent: 1.2
+    failure_exponent_minimum: 0.55
+    failure_exponent_decrement: 0.15
+    uniform_mixture: 0.12
+    maximum_profile_probability: 0.28
+    composite_weights:
+      profile_mean: 0.40
+      grid_auc: 0.25
+      cooperation: 0.20
+      nominal: 0.15
+      constraint_penalty: 0.50
+  gates:
+    nominal_regression_margin: 0.10
+    minimum_2v2_open_success: 0.55
+    minimum_3v2_open_success: 0.35
+    minimum_cooperative_success: 0.30
+    minimum_successful_sequence_seconds: 8.0
+    minimum_meaningful_actions: 2
+    minimum_profile_improvement: 0.10
+    maximum_grid_regression: 0.05
+
+phase3_reward:
+  goal_reward: 10.0
+  out_of_bounds_penalty: -3.0
+  step_penalty: 0.002
+  phase3_progress: 0.7
+  controlled_reception: 0.35
+  pass_advance: 0.30
+  pass_to_goal: 1.0
+  turnover_penalty: -0.50
+  collision_penalty: -0.02
+
+model:
+  actor_hidden_sizes: [192, 192]
+  central_critic_hidden_sizes: [192, 192]
+  activation: tanh
+  orthogonal_init: true
+
+ppo:
+  algorithm: mappo
+  actor_learning_rate: 0.00030
+  critic_learning_rate: 0.00030
+  actor_min_learning_rate: 0.00003
+  critic_min_learning_rate: 0.00003
+  update_epochs: 4
+  actor_minibatch_size: 2048
+  critic_minibatch_size: 1024
+  target_kl: 0.03
+  clipping_warning_fraction: 0.80
+
+train:
+  total_steps: 500000
+  num_envs: 16
+  rollout_steps: 64
+  checkpoint_frequency_steps: 100000
+  validation_frequency_steps: 50000
+  validation_episodes: 40
+
+video:
+  width: 1280
+  height: 720
+  fps: 20
+  episodes: 3

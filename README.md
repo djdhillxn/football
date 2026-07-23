@@ -1,16 +1,17 @@
 # Failure-Directed Robust Multi-Agent Robot Soccer
 
-This repository studies cooperative high-level skill selection for two robot-soccer attackers
-against one scripted defender. A parameter-shared policy is trained quickly in an explicit
-kinematic simulator and frozen before evaluation in an independently implemented Pymunk
-rigid-body simulator. The core question is whether failure-directed domain randomization can
-improve zero-shot cross-simulator robustness to delays, perception errors, communication loss,
-locomotion uncertainty, kick variation, and changed ball dynamics.
+This repository studies cooperative high-level skill selection for small-sided robot soccer.
+Phase 2 tested two attackers against one scripted defender; Phase 3 adds calibrated 2v2/3v2
+team-play scenarios, padded roster masks, a parameter-shared GRU actor, and a recurrent centralized
+critic. Policies train in an explicit kinematic simulator and freeze before evaluation in an
+independently integrated Pymunk rigid-body simulator.
 
 The project is **multi-fidelity, sim-to-real-oriented robustness research**. Pymunk evaluation is
 sim-to-sim transfer and a controlled proxy for parts of the sim-to-real gap; it is not evidence of
-physical-robot deployment. No final experimental result is claimed until completed run artifacts
-have been generated and aggregated.
+physical-robot deployment. The completed three-seed Phase 2 result is a failed overall gate:
+failure-directed randomization improves Pymunk profile/grid robustness, but loses too much nominal
+abstract competence and learns no stable passing. Phase 3 is implemented but has not been fully
+trained; smoke runs are not scientific results.
 
 ## Contribution and architecture
 
@@ -41,8 +42,8 @@ approach, dribble left, dribble right, shoot, pass, support, and hold/face ball.
 configs/              Inherited experiment configurations and perturbation profiles
 robosoccer/           Configuration, environments, training, evaluation, and utilities
 scripts/              Thin module-based command-line entry points
-tests/test_core.py    Concentrated simulator, PPO, curriculum, artifact, and video tests
-notebooks/            Two Colab/VS Code command dashboards
+tests/                Phase 1/2 and recurrent Phase 3 correctness tests
+notebooks/            Three Colab/VS Code command dashboards
 reports/              Paper-style report, technical ledger, bibliography, generated results
 webots/README.md      Optional future adapter contract; no untested Webots world is included
 ```
@@ -70,6 +71,49 @@ python -m scripts.train --config configs/smoke_test.yaml
 The smoke configuration performs several tiny MAPPO updates on CPU, exercises failure-directed
 sampling, saves complete checkpoints and TorchScript actors, writes CSV metrics, and verifies
 headless rendering. It is an infrastructure check, not a scientific experiment.
+
+The recurrent Phase 3 smoke path is:
+
+```bash
+python -m scripts.calibrate_phase3 --config configs/phase3_base.yaml \
+  --output-dir runs/phase3_calibration_smoke --episodes 20 --smoke
+python -m scripts.benchmark_throughput --config configs/phase3_smoke.yaml \
+  --num-envs 4 8 16 --updates 2
+python -m scripts.train --config configs/phase3_smoke.yaml
+```
+
+The calibration smoke validates code and the expected ordering but deliberately sets
+`training_authorized=false`. Only the non-smoke 100-episode calibration can satisfy Gate A.
+
+## Phase 3 gated workflow
+
+Phase 3 has four nominal stages with cumulative target budgets configured in YAML: 0.5M-step 2v2
+open play, 1.0M pass-required play, 1.5M mixed 2v2/3v2, and 2.0M open/press team play. Every stage
+can resume from the preceding checkpoint. A scientific run requires the saved full calibration:
+
+```bash
+python -m scripts.calibrate_phase3 --config configs/phase3_base.yaml \
+  --output-dir runs/phase3_calibration_seed3 --episodes 100
+
+python -m scripts.train --config configs/phase3_recurrent_nominal.yaml \
+  --stage stage_a --seed 3 \
+  --calibration-summary runs/phase3_calibration_seed3/calibration_summary.json
+```
+
+Stages B--D use `--resume` with the preceding best nominal checkpoint. CC-FDR starts from the best
+completed nominal policy and therefore requires `--warm-start`; it refuses random initialization:
+
+```bash
+python -m scripts.train --config configs/phase3_cc_fdr.yaml --seed 3 \
+  --warm-start runs/<nominal-run>/models/best_nominal_checkpoint.pt \
+  --calibration-summary runs/phase3_calibration_seed3/calibration_summary.json
+```
+
+Gate B requires 2v2 open success at least 0.55, 3v2 open success at least 0.35,
+pass-required cooperative success at least 0.30, and median successful sequences of at least eight
+seconds. Gate C requires profile-mean improvement of at least 0.10, nominal loss no more than
+0.10, grid regression no more than 0.05, and no cooperation regression. Development uses seed 3;
+new final seeds 4, 5, and 6 remain disabled until all gates pass.
 
 PettingZoo API checks can be isolated with:
 
@@ -177,7 +221,10 @@ runs/YYYYMMDD_HHMMSS_experiment_method_seed0/
 │   └── final_actor.ts
 ```
 
-`runs/latest_<experiment>.txt` points to the latest complete run and
+`runs/latest_<experiment>.txt` points to the latest complete run. New local pointers use portable
+`runs/<run-directory>` values; readers also recover the basename of historical absolute
+Colab/Mac paths. `python -m scripts.audit_workspace` reports stale pointers, incomplete metadata,
+missing referenced artifacts, and notebook-only runs without mutating the workspace.
 `runs/experiment_manifest.jsonl` is the discovery ledger. Compare explicit runs or completed final
 runs with:
 
@@ -291,12 +338,15 @@ abstract test, Pymunk transfer, and video scenarios use disjoint configurable se
 
 ## Colab workflow
 
-The two notebooks are command dashboards rather than hidden implementations:
+The three notebooks are command dashboards rather than hidden implementations:
 
 - `notebooks/phase1_environment_and_baselines.ipynb`: initialization, tests, smoke run, baselines,
   IPPO, transfer, explicit readiness audit, video, and Drive sync.
 - `notebooks/phase2_training_transfer_report.ipynb`: MAPPO variants, ablations, full evaluation,
   comparison, reports, and Drive sync. It recomputes the Phase-1 audit before allowing training.
+- `notebooks/phase3_adversarial_teamplay.ipynb`: calibration, throughput, staged recurrent
+  training, CC-FDR, Gate B/C evaluation, videos, reports, and Drive sync. Expensive final seeds are
+  disabled by default.
 
 They keep the repository under `/content`, use Drive only for persistent artifacts, refuse to pull
 over a dirty checkout, restore the complete artifact workspace, and allow later experiment sections
@@ -311,34 +361,39 @@ latexmk -pdf -interaction=nonstopmode -halt-on-error -outdir=reports reports/sur
 
 The main report is a paper-style account. The surrogate report is the technical ledger for exact
 settings, attempts, failures, and decisions. Both place their build products in `reports/` and
-clearly separate Phase-1 diagnostics from pending Phase-2 comparative results.
+clearly separate completed Phase-1/2 evidence from the unexecuted Phase-3 protocol.
 
 ## Current status, limitations, and expected deliverables
 
-The repository implements the mandatory abstract environment, independent Pymunk transfer
-environment, parameter-shared IPPO/MAPPO, failure-directed curriculum, resumable artifact flow,
-evaluation suites, videos, aggregation, notebooks, tests, and reports. This statement concerns
-software availability, not final performance. Full multi-seed training remains to be run.
+The repository implements the original environments and feed-forward comparisons plus the Phase 3
+fixed-roster tasks, recurrent MAPPO, competence-constrained failure direction, calibration and
+development gates, portable artifact audit, throughput instrumentation, upgraded video path, and
+an independently runnable notebook. This statement concerns software availability, not Phase 3
+performance. Full recurrent development and final seeds remain to be run.
 
-The task is deliberately reduced: vector observations, two attackers, scripted defenders,
-high-level skills, synchronous environments, and feed-forward policies. It excludes learned
-locomotion, images, recurrent memory, self-play, learned opponents, 5v5 tactics, ROS, Webots claims,
-and physical validation. Transfer success in Pymunk would show robustness to a controlled fidelity
-change, not readiness for a humanoid robot. Physical work requires perception, localization,
-collision-safe locomotion, kicking, emergency stops, and hardware validation.
+The task remains deliberately reduced: vector observations, two or three attackers, scripted
+defenders, high-level skills, and synchronous environments. It excludes learned locomotion,
+images, mandatory self-play, 5v5 tactics, ROS, Webots claims, and physical validation. Transfer
+success in Pymunk shows robustness to a controlled fidelity change, not readiness for a humanoid
+robot. Physical work requires perception, localization, collision-safe locomotion, kicking,
+emergency stops, and hardware validation.
+
+A bounded future bridge to RoboCup 2D, Webots, or a humanoid stack becomes appropriate only after
+the hard calibration, pass-required cooperation, recurrent nominal, competence-preserving
+robustness, and sustained 3v2 video gates all pass. No large external football framework is a
+Phase 3 dependency.
 
 Expected final deliverables are multi-seed run directories, frozen TorchScript actors, baseline and
 transfer tables, robustness grids, representative videos, generated report figures, and compiled
 PDFs. Webots is a later fidelity tier only after the mandatory matrix is complete.
 
-## Fifteen-day execution roadmap
+## Prioritized execution roadmap
 
-1. **Days 1–2:** run local/Colab tests and smoke jobs; inspect rendered dynamics and baseline traces.
-2. **Days 3–4:** run nominal IPPO and MAPPO pilot seeds; tune only from validation artifacts.
-3. **Days 5–6:** run uniform-randomization pilots and verify sampled profile coverage.
-4. **Days 7–8:** run failure-directed pilots; inspect probability entropy and cap behavior.
-5. **Days 9–10:** lock hyperparameters and launch the planned multi-seed training matrix.
-6. **Days 11–12:** run fixed abstract, profile, Pymunk transfer, and robustness evaluations.
-7. **Day 13:** run delay/communication ablations and record qualitative success/failure videos.
-8. **Day 14:** aggregate artifacts, audit seed separation, and compile both reports.
-9. **Day 15:** reproduce key tables from restored Drive artifacts and document all failed runs.
+1. Run Ruff, pytest, workspace audit, calibration smoke, and the full 100-episode Gate A.
+2. Run the 4/8/16 smoke benchmark, then measure 32/64/128/256/512 lanes on the L4 and select the
+   fastest stable production count rather than assuming one.
+3. Train seed-3 nominal stages A--D, evaluating and syncing after each stage.
+4. Run Gate B and inspect matched 2v2/3v2 videos; stop if team play is absent.
+5. Warm-start CC-FDR from the best nominal checkpoint and inspect competence-guard events.
+6. Run Gate C. Only after it passes, freeze the protocol and launch separate seeds 4, 5, and 6.
+7. Regenerate JSON-derived tables and compile both reports without inventing missing results.

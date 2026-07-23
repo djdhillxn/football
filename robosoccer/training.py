@@ -2,6 +2,7 @@
 
 import copy
 import csv
+import json
 import logging
 import math
 import random
@@ -973,7 +974,14 @@ def load_checkpoint_actor(config, checkpoint_path, device="cpu"):
     return actor, normalizer, checkpoint
 
 
-def run_training(config, source_config=None, parsed_args=None, run_name=None, resume_path=None):
+def run_training(
+    config,
+    source_config=None,
+    parsed_args=None,
+    run_name=None,
+    resume_path=None,
+    warm_start_path=None,
+):
     """Create an artifact run, train safely, and update metadata on success or failure."""
     run_dir = create_run_directory(config, run_name=run_name)
     setup_logging(
@@ -989,7 +997,32 @@ def run_training(config, source_config=None, parsed_args=None, run_name=None, re
     )
     trainer = None
     try:
-        trainer = PPOTrainer(config, run_dir, resume_path=resume_path)
+        if config.get("phase3", {}).get("enabled", False):
+            phase3 = config["phase3"]
+            if phase3.get("require_calibration", False):
+                summary_path = phase3.get("calibration_summary")
+                if not summary_path:
+                    raise ValueError(
+                        "Phase 3 training is gated: pass --calibration-summary from a "
+                        "successful non-smoke calibration run"
+                    )
+                calibration = json.loads(Path(summary_path).read_text(encoding="utf-8"))
+                if not calibration.get("training_authorized", False):
+                    raise ValueError(
+                        "Phase 3 calibration did not authorize training; thresholds are not relaxed"
+                    )
+            from robosoccer.recurrent import RecurrentMAPPOTrainer
+
+            trainer = RecurrentMAPPOTrainer(
+                config,
+                run_dir,
+                resume_path=resume_path,
+                warm_start_path=warm_start_path,
+            )
+        else:
+            if warm_start_path is not None:
+                raise ValueError("--warm-start is supported only for Phase 3 recurrent training")
+            trainer = PPOTrainer(config, run_dir, resume_path=resume_path)
         artifacts = trainer.train()
         metadata["status"] = "complete"
         metadata["utc_completion"] = utc_now()

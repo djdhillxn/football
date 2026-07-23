@@ -15,6 +15,9 @@ def build_parser():
     parser.add_argument("--num-envs", type=int)
     parser.add_argument("--device")
     parser.add_argument("--resume")
+    parser.add_argument("--warm-start")
+    parser.add_argument("--stage", choices=["stage_a", "stage_b", "stage_c", "stage_d"])
+    parser.add_argument("--calibration-summary")
     parser.add_argument("overrides", nargs="*", help="YAML-valued section.key=value overrides")
     return parser
 
@@ -33,6 +36,10 @@ def main():
         overrides.append("train.device=" + args.device)
     if args.run_name is not None:
         overrides.append("experiment.name=" + args.run_name)
+    if args.stage is not None:
+        overrides.append("phase3.active_stage=" + args.stage)
+    if args.calibration_summary is not None:
+        overrides.append("phase3.calibration_summary=" + args.calibration_summary)
     config = load_config(args.config, overrides)
     run_training(
         config,
@@ -40,9 +47,9 @@ def main():
         parsed_args=vars(args),
         run_name=args.run_name,
         resume_path=args.resume,
+        warm_start_path=args.warm_start,
     )
 
 
 if __name__ == "__main__":
     main()
-

@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "protocol": "phase2_confirmatory",
+  "generated_from": {
+    "executed_notebook": "notebooks/phase2_training_transfer_report.ipynb",
+    "comparison_cell_index": 22,
+    "evaluation_seed_bases": {
+      "abstract": 230000,
+      "pymunk_transfer": 240000,
+      "pymunk_profiles": 241000,
+      "pymunk_robustness": 242000,
+      "pymunk_cooperation": 250000,
+      "delay_trace": 260000
+    },
+    "note": "Seed-level values are transcribed from the executed comparison cell. The notebook output is authoritative because the seed-1 and seed-2 run directories are not present in this local lightweight archive."
+  },
+  "local_archive": {
+    "raw_seed_runs_complete": false,
+    "present_primary_runs": [
+      "runs/20260722_002437_mappo_nominal_mappo_seed0",
+      "runs/20260722_020456_mappo_uniform_dr_mappo_seed0",
+      "runs/20260722_033215_mappo_failure_dr_mappo_seed0"
+    ],
+    "missing_primary_runs": [
+      "runs/20260722_082453_mappo_nominal_mappo_seed1",
+      "runs/20260722_095311_mappo_uniform_dr_mappo_seed1",
+      "runs/20260722_112147_mappo_failure_dr_mappo_seed1",
+      "runs/20260722_151725_mappo_nominal_mappo_seed2",
+      "runs/20260722_175954_mappo_uniform_dr_mappo_seed2",
+      "runs/20260722_192845_mappo_failure_dr_mappo_seed2"
+    ]
+  },
+  "phase1_reference": {
+    "source": "runs/20260721_042831_repaired_phase1_heldout_heuristic_seed0/eval/baseline_summary.json",
+    "episodes_per_method_simulator": 100,
+    "success": {
+      "random": {
+        "abstract": 0.03,
+        "pymunk": 0.49
+      },
+      "double_chase": {
+        "abstract": 0.15,
+        "pymunk": 0.68
+      },
+      "role_based": {
+        "abstract": 0.28,
+        "pymunk": 0.66
+      }
+    },
+    "warning": "This Phase-1 intercept setup is permissive in Pymunk and is not the Phase-3 calibration task."
+  },
+  "methods": {
+    "mappo_nominal": {
+      "display_name": "Nominal MAPPO",
+      "per_seed": [
+        {
+          "training_seed": 0,
+          "abstract_intercept_success": 0.76,
+          "profile_mean_success": 0.3911111111111111,
+          "grid_auc": 0.45399999999999996,
+          "cooperative_success": 0.0
+        },
+        {
+          "training_seed": 1,
+          "abstract_intercept_success": 0.83,
+          "profile_mean_success": 0.2488888888888889,
+          "grid_auc": 0.24,
+          "cooperative_success": 0.0
+        },
+        {
+          "training_seed": 2,
+          "abstract_intercept_success": 0.7,
+          "profile_mean_success": 0.2811111111111111,
+          "grid_auc": 0.25,
+          "cooperative_success": 0.0
+        }
+      ]
+    },
+    "mappo_uniform_dr": {
+      "display_name": "Uniform-DR MAPPO",
+      "per_seed": [
+        {
+          "training_seed": 0,
+          "abstract_intercept_success": 0.39,
+          "profile_mean_success": 0.38999999999999996,
+          "grid_auc": 0.344,
+          "cooperative_success": 0.0
+        },
+        {
+          "training_seed": 1,
+          "abstract_intercept_success": 0.32,
+          "profile_mean_success": 0.5422222222222223,
+          "grid_auc": 0.46,
+          "cooperative_success": 0.0
+        },
+        {
+          "training_seed": 2,
+          "abstract_intercept_success": 0.72,
+          "profile_mean_success": 0.12666666666666668,
+          "grid_auc": 0.17600000000000002,
+          "cooperative_success": 0.32
+        }
+      ]
+    },
+    "mappo_failure_dr": {
+      "display_name": "Failure-directed MAPPO",
+      "per_seed": [
+        {
+          "training_seed": 0,
+          "abstract_intercept_success": 0.45,
+          "profile_mean_success": 0.49666666666666676,
+          "grid_auc": 0.40199999999999997,
+          "cooperative_success": 0.0
+        },
+        {
+          "training_seed": 1,
+          "abstract_intercept_success": 0.48,
+          "profile_mean_success": 0.5666666666666667,
+          "grid_auc": 0.544,
+          "cooperative_success": 0.0
+        },
+        {
+          "training_seed": 2,
+          "abstract_intercept_success": 0.35,
+          "profile_mean_success": 0.48222222222222233,
+          "grid_auc": 0.42,
+          "cooperative_success": 0.0
+        }
+      ]
+    }
+  },
+  "gates": {
+    "minimum_training_seeds": {
+      "passed": true,
+      "criterion": "At least three complete independent training seeds per method."
+    },
+    "profile_mean_advantage": {
+      "passed": true,
+      "criterion": "Failure-directed mean exceeds both equal-budget controls."
+    },
+    "profile_direction_stability": {
+      "passed": true,
+      "criterion": "Failure-directed exceeds both controls in at least two matched seeds.",
+      "observed_seeds": [
+        0,
+        1,
+        2
+      ]
+    },
+    "grid_noninferiority": {
+      "passed": true,
+      "criterion": "Failure-directed grid AUC is no more than 0.05 below nominal."
+    },
+    "abstract_intercept_noninferiority": {
+      "passed": false,
+      "criterion": "Failure-directed abstract intercept is no more than 0.10 below nominal.",
+      "nominal_mean": 0.7633333333333333,
+      "failure_directed_mean": 0.4266666666666666,
+      "observed_drop": 0.3366666666666667
+    },
+    "cooperation": {
+      "passed": false,
+      "criterion": "Nonzero cooperative success that is stable across seeds.",
+      "failure_directed_mean": 0.0
+    },
+    "confirmation_passed": false,
+    "delay_failure_replicated": false,
+    "delay_ablation_authorized": false
+  },
+  "decision": {
+    "phase2_claim": "Failure-directed randomization reliably redirects competence toward the perturbed Pymunk profile distribution, but does not preserve nominal abstract competence and does not learn reliable passing.",
+    "phase3_authorized": true,
+    "authorization_scope": "A redesigned recurrent team-play phase with a competence constraint, calibration gate, and staged curriculum. The failed Phase-2 actor is not promoted as a solved policy.",
+    "full_training_completed": false
+  }
+}

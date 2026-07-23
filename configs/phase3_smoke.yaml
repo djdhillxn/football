@@ -1,0 +1,59 @@
+inherits: phase3_base.yaml
+
+experiment:
+  name: phase3_smoke
+  seed: 3
+  tensorboard: false
+
+phase3:
+  require_calibration: false
+  active_stage: stage_a
+  max_episode_steps: 40
+  recurrent:
+    hidden_size: 64
+    sequence_length: 4
+    burn_in_steps: 1
+  stages:
+    stage_a:
+      target_steps: 128
+      match_mode: false
+      scenarios: [phase3_2v2_open, phase3_2v2_pass_required]
+      probabilities: [0.5, 0.5]
+    stage_b:
+      target_steps: 128
+      match_mode: true
+      scenarios: [phase3_2v2_open, phase3_2v2_pass_required]
+      probabilities: [0.5, 0.5]
+    stage_c:
+      target_steps: 128
+      match_mode: true
+      scenarios: [phase3_2v2_open, phase3_2v2_pass_required, phase3_3v2_open]
+      probabilities: [0.34, 0.33, 0.33]
+    stage_d:
+      target_steps: 128
+      match_mode: true
+      scenarios:
+        - phase3_2v2_open
+        - phase3_2v2_pass_required
+        - phase3_3v2_open
+        - phase3_3v2_press
+      probabilities: [0.25, 0.25, 0.25, 0.25]
+
+model:
+  actor_hidden_sizes: [64, 64]
+  central_critic_hidden_sizes: [64, 64]
+
+ppo:
+  update_epochs: 1
+  actor_minibatch_size: 64
+  critic_minibatch_size: 32
+
+train:
+  total_steps: 128
+  num_envs: 2
+  rollout_steps: 8
+  checkpoint_frequency_steps: 64
+  validation_frequency_steps: 64
+  validation_episodes: 2
+  progress_bar: true
+  device: cpu

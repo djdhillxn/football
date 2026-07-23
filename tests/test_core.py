@@ -14,6 +14,7 @@ from pettingzoo.test import parallel_api_test
 
 from robosoccer.artifacts import (
     prune_local_training_artifacts,
+    resolve_run_pointer,
     sync_artifacts_from_drive,
     sync_run_to_drive,
 )
@@ -942,8 +943,11 @@ def test_drive_pull_merges_finished_runs_and_generated_artifacts(tmp_path):
     assert (repository / "reports" / "generated_results.tex").read_text(
         encoding="utf-8"
     ) == "newer generated"
-    pointer = Path((local_runs / "latest_alpha.txt").read_text(encoding="utf-8").strip())
-    assert pointer == (local_runs / "20260101_000001_alpha_mappo_seed0").resolve()
+    pointer_text = (local_runs / "latest_alpha.txt").read_text(encoding="utf-8").strip()
+    assert pointer_text == "runs/20260101_000001_alpha_mappo_seed0"
+    assert resolve_run_pointer(
+        local_runs / "latest_alpha.txt", repository
+    ) == (local_runs / "20260101_000001_alpha_mappo_seed0").resolve()
     manifest = (local_runs / "experiment_manifest.jsonl").read_text(encoding="utf-8")
     assert '"status": "complete"' in manifest
     assert '"status": "failed"' in manifest

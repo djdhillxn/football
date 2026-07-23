@@ -213,7 +213,13 @@ def finalize_run(config, run_dir, metadata):
     root = Path(config["experiment"].get("output_dir", "runs")).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     name = safe_name(config["experiment"]["name"])
-    (root / ("latest_" + name + ".txt")).write_text(str(Path(run_dir).resolve()) + "\n", encoding="utf-8")
+    output_setting = str(config["experiment"].get("output_dir", "runs"))
+    pointer_value = (
+        "runs/" + Path(run_dir).name
+        if output_setting == "runs"
+        else str(Path(run_dir).resolve())
+    )
+    (root / ("latest_" + name + ".txt")).write_text(pointer_value + "\n", encoding="utf-8")
     with (root / "experiment_manifest.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(json_safe(metadata), sort_keys=True) + "\n")
 

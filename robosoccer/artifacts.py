@@ -4,6 +4,7 @@ import filecmp
 import json
 import logging
 import os
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -334,6 +335,288 @@ def latest_run_for_experiment(runs_root, experiment_name, statuses=None):
     return max(candidates, key=lambda path: path.name).resolve()
 
 
+def resolve_run_pointer(pointer_path, repository_root=None):
+    """Resolve portable pointers and recover stale Colab/Mac absolute paths by basename."""
+    pointer_path = Path(pointer_path)
+    if not pointer_path.is_file():
+        raise FileNotFoundError("Run pointer was not found: " + str(pointer_path))
+    raw = pointer_path.read_text(encoding="utf-8").strip()
+    if not raw:
+        raise ValueError("Run pointer is empty: " + str(pointer_path))
+    candidate = Path(raw).expanduser()
+    repository = Path(repository_root or REPOSITORY_ROOT).expanduser().resolve()
+    attempts = []
+    if candidate.is_absolute():
+        attempts.append(candidate)
+    else:
+        attempts.extend([repository / candidate, pointer_path.parent.parent / candidate])
+    basename = candidate.name
+    attempts.extend([pointer_path.parent / basename, repository / "runs" / basename])
+    for attempt in attempts:
+        if attempt.is_dir():
+            return attempt.resolve()
+    raise FileNotFoundError(
+        "Pointer target is unavailable and basename recovery failed: "
+        + raw
+        + " ("
+        + str(pointer_path)
+        + ")"
+    )
+
+
+def audit_workspace(repository_root=None):
+    """Read-only artifact audit covering pointers, metadata, configs, and notebook references."""
+    repository = Path(repository_root or REPOSITORY_ROOT).expanduser().resolve()
+    runs_root = repository / "runs"
+    issues = []
+    runs = {}
+    duplicate_ids = {}
+    auxiliary_directories = {"comparisons", "logs", "manual_baseline_videos"}
+    if runs_root.is_dir():
+        for run_dir in sorted(runs_root.iterdir()):
+            if not run_dir.is_dir():
+                continue
+            if (
+                run_dir.name in auxiliary_directories
+                or run_dir.name.startswith("phase3_calibration")
+            ):
+                continue
+            metadata = read_run_metadata(run_dir)
+            if metadata is None:
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "kind": "missing_metadata",
+                        "path": str(run_dir.relative_to(repository)),
+                    }
+                )
+                continue
+            run_id = run_dir.name
+            duplicate_ids.setdefault(run_id, []).append(str(run_dir))
+            record = {
+                "path": str(run_dir.relative_to(repository)),
+                "status": metadata.get("status"),
+                "experiment_name": metadata.get("experiment_name"),
+                "seed": metadata.get("seed"),
+                "config_present": (run_dir / "resolved_config.yaml").is_file(),
+            }
+            runs[run_id] = record
+            if metadata.get("status") not in {"complete", "failed"}:
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "kind": "incomplete_run",
+                        "path": record["path"],
+                        "status": metadata.get("status"),
+                    }
+                )
+            if not record["config_present"]:
+                issues.append(
+                    {
+                        "severity": "error",
+                        "kind": "missing_resolved_config",
+                        "path": record["path"],
+                    }
+                )
+            for label, artifact_path in metadata.get("output_artifact_paths", {}).items():
+                if not isinstance(artifact_path, str):
+                    continue
+                candidate = Path(artifact_path)
+                if candidate.is_absolute() and candidate.is_file():
+                    continue
+                recovered = next(iter(run_dir.rglob(candidate.name)), None)
+                if (recovered is None or not recovered.is_file()) and label in {
+                    "final_checkpoint",
+                    "best_checkpoint",
+                    "metrics_csv",
+                }:
+                    issues.append(
+                        {
+                            "severity": "warning",
+                            "kind": "missing_referenced_artifact",
+                            "path": record["path"],
+                            "label": label,
+                            "reference": artifact_path,
+                        }
+                    )
+    for run_id, paths in duplicate_ids.items():
+        if len(paths) > 1:
+            issues.append(
+                {
+                    "severity": "error",
+                    "kind": "duplicate_run_id",
+                    "run_id": run_id,
+                    "paths": paths,
+                }
+            )
+    pointers = {}
+    for pointer in sorted(runs_root.glob("latest_*.txt")) if runs_root.is_dir() else []:
+        raw_pointer = pointer.read_text(encoding="utf-8").strip()
+        if Path(raw_pointer).is_absolute():
+            issues.append(
+                {
+                    "severity": "warning",
+                    "kind": "nonportable_pointer",
+                    "path": str(pointer.relative_to(repository)),
+                    "reference": raw_pointer,
+                }
+            )
+        try:
+            target = resolve_run_pointer(pointer, repository)
+            pointers[pointer.name] = {
+                "target": str(target.relative_to(repository)),
+                "resolved": True,
+            }
+        except (FileNotFoundError, ValueError) as exc:
+            pointers[pointer.name] = {"target": None, "resolved": False}
+            issues.append(
+                {
+                    "severity": "warning",
+                    "kind": "stale_pointer",
+                    "path": str(pointer.relative_to(repository)),
+                    "message": str(exc),
+                }
+            )
+    notebook_references = {}
+    for notebook in sorted((repository / "notebooks").glob("*.ipynb")):
+        text = notebook.read_text(encoding="utf-8")
+        references = sorted(
+            set(
+                re.findall(
+                    r"20[0-9]{6}_[0-9]{6}_[A-Za-z0-9_-]+_seed[0-9]+",
+                    text,
+                )
+            )
+        )
+        missing = [
+            reference
+            for reference in references
+            if not (runs_root / Path(reference).name).is_dir()
+        ]
+        notebook_references[notebook.name] = {
+            "run_reference_count": len(references),
+            "missing_local_references": missing,
+        }
+        for reference in missing:
+            issues.append(
+                {
+                    "severity": "warning",
+                    "kind": "notebook_run_absent_locally",
+                    "path": str(notebook.relative_to(repository)),
+                    "reference": reference,
+                }
+            )
+    manifest_entries = []
+    missing_manifest_runs = []
+    manifest_path = runs_root / "experiment_manifest.jsonl"
+    if manifest_path.is_file():
+        for line_number, line in enumerate(
+            manifest_path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as exc:
+                issues.append(
+                    {
+                        "severity": "error",
+                        "kind": "invalid_manifest_entry",
+                        "path": str(manifest_path.relative_to(repository)),
+                        "line": line_number,
+                        "message": str(exc),
+                    }
+                )
+                continue
+            run_directory = entry.get("run_directory")
+            run_id = Path(run_directory).name if run_directory else None
+            manifest_entries.append(
+                {
+                    "run_id": run_id,
+                    "status": entry.get("status"),
+                    "experiment_name": entry.get("experiment_name"),
+                }
+            )
+            if run_id and not (runs_root / run_id).is_dir():
+                missing_manifest_runs.append(run_id)
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "kind": "manifest_run_absent_locally",
+                        "path": str(manifest_path.relative_to(repository)),
+                        "reference": run_id,
+                    }
+                )
+    stale_reports = []
+    reports_root = repository / "reports"
+    for stem in ["main", "surrogate_notes"]:
+        source = reports_root / (stem + ".tex")
+        pdf = reports_root / (stem + ".pdf")
+        dependencies = [source]
+        if stem == "main":
+            dependencies.append(reports_root / "generated_results.tex")
+        newest_source = max(
+            (path.stat().st_mtime for path in dependencies if path.is_file()),
+            default=0.0,
+        )
+        if source.is_file() and (not pdf.is_file() or newest_source > pdf.stat().st_mtime):
+            stale_reports.append(stem)
+            issues.append(
+                {
+                    "severity": "warning",
+                    "kind": "report_pdf_stale_or_missing",
+                    "path": str(source.relative_to(repository)),
+                }
+            )
+    comparison_missing_sources = {}
+    comparisons_root = runs_root / "comparisons"
+    if comparisons_root.is_dir():
+        for comparison in sorted(comparisons_root.rglob("*")):
+            if not comparison.is_file() or comparison.suffix not in {".csv", ".json", ".jsonl"}:
+                continue
+            text = comparison.read_text(encoding="utf-8", errors="replace")
+            references = sorted(
+                set(
+                    re.findall(
+                        r"20[0-9]{6}_[0-9]{6}_[A-Za-z0-9_-]+_seed[0-9]+",
+                        text,
+                    )
+                )
+            )
+            missing = [
+                reference
+                for reference in references
+                if not (runs_root / reference).is_dir()
+            ]
+            if missing:
+                relative = str(comparison.relative_to(repository))
+                comparison_missing_sources[relative] = missing
+                issues.append(
+                    {
+                        "severity": "warning",
+                        "kind": "comparison_source_absent_locally",
+                        "path": relative,
+                        "references": missing,
+                    }
+                )
+    return {
+        "schema_version": 1,
+        "repository": str(repository),
+        "run_count": len(runs),
+        "runs": runs,
+        "manifest_entry_count": len(manifest_entries),
+        "manifest_entries": manifest_entries,
+        "missing_manifest_runs": missing_manifest_runs,
+        "pointers": pointers,
+        "notebooks": notebook_references,
+        "stale_reports": stale_reports,
+        "comparison_missing_sources": comparison_missing_sources,
+        "issues": issues,
+        "error_count": sum(issue["severity"] == "error" for issue in issues),
+        "warning_count": sum(issue["severity"] == "warning" for issue in issues),
+    }
+
+
 def refresh_artifact_index(runs_root, portable=False, dry_run=False):
     """Rebuild latest pointers and the manifest from destination run metadata."""
     runs_root = Path(runs_root)
@@ -512,7 +795,7 @@ def sync_artifacts_from_drive(
     result["copied_report_files"] = _sync_report_artifacts(
         drive_project / "reports", repository_root / "reports", dry_run=dry_run
     )
-    pointers = refresh_artifact_index(local_runs, portable=False, dry_run=dry_run)
+    pointers = refresh_artifact_index(local_runs, portable=True, dry_run=dry_run)
     if not dry_run:
         save_sync_state(state_path, state)
     result["latest_pointers"] = {name: str(path) for name, path in pointers.items()}

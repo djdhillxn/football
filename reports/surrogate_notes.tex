@@ -1,333 +1,427 @@
-\documentclass[10pt]{article}
+\documentclass[12pt,twocolumn]{article}
 \usepackage[T1]{fontenc}
-\usepackage[margin=0.75in]{geometry}
+\usepackage[margin=0.80in,columnsep=0.25in]{geometry}
 \usepackage{amsmath}
 \usepackage{booktabs}
-\usepackage{longtable}
-\usepackage{array}
+\usepackage{graphicx}
+\usepackage{xcolor}
 \usepackage[hidelinks]{hyperref}
-\title{Robot-Soccer Transfer: Technical and Experimental Record}
-\author{Manually maintained surrogate report}
+\usepackage{microtype}
+\setlength{\emergencystretch}{2em}
+\title{\vspace{-1.2em}Robot-Soccer Transfer: Technical Surrogate and Runbook}
+\author{Auditable implementation notes}
 \date{22 July 2026}
+
 \begin{document}
 \maketitle
 
-\section{Research contract and present decision}
-The project studies one concrete question: whether failure-directed domain randomization improves
-zero-shot transfer of a parameter-shared, high-level 2-v-1 soccer policy from a fast abstract
-simulator to an independent Pymunk implementation, relative to equal-budget nominal and uniformly
-randomized MAPPO. It is not a general football benchmark, a full-team system, or a physical
-sim-to-real claim.
+\section{Purpose and truth status}
+This document is the technical companion to the public report. It records exact evidence,
+limitations, interfaces, gates, and the intended execution order. It deliberately distinguishes
+implemented machinery, smoke validation, and completed scientific experiments.
 
-The status after the completed Phase 2 notebook is \textbf{yellow / continue within Phase 2}.
-Engineering validity is established and the single-seed result is non-trivial. Failure-directed
-MAPPO improves canonical Pymunk success and the broad profile mean, but loses to nominal MAPPO on
-the delay--noise grid. Only seed 0 has been trained, and passing is nearly absent. The immediate
-work is explanation plus replication; Webots, full-game football, and physical deployment are not
-the next step.
+\textbf{Completed evidence:} Phase 1 baseline gate and Phase 2 three-seed confirmation.
+\textbf{Current decision:} Phase 2 failed overall because nominal competence and cooperation gates
+failed. \textbf{Implemented next experiment:} recurrent team-play Phase 3. \textbf{Not completed:}
+full Phase 3 training or final seed-4/5/6 evaluation.
 
-\section{Repository and runtime setup}
-The notebooks preserve Colab's CUDA-enabled Torch/NumPy/pandas stack, install project-specific
-dependencies, install the project editable with \texttt{--no-deps}, and print effective versions.
-Runs are saved to Drive immediately after training and again after evaluation/video commands. The
-Mac sync restores lightweight context---logs, CSV/JSON/YAML, plots, reports, and videos---while
-excluding model/checkpoint payloads. Every run records resolved configuration, source commit,
-packages, device, command, status, seed allocations, and artifact paths.
-
-The Phase 2 notebook executed all experiment cells. Its only exceptions are the main and surrogate
-report-build cells: Colab returned shell status 127 because \texttt{latexmk} was not installed.
-Those failures did not affect training/evaluation artifacts. Reports are compiled locally after
-this audit.
-
-\section{Environment and algorithm index}
-The field is $9\,\mathrm{m}\times6\,\mathrm{m}$ with a $1.5\,\mathrm{m}$ goal. One macro decision
-is repeated for four $0.1\,\mathrm{s}$ low-level steps. The abstract implementation uses explicit
-bounded kinematics and collision/ball rules. Pymunk independently uses rigid bodies, five physics
-substeps, force/torque velocity tracking, static player containment, ball line crossing, drag,
-friction, elasticity, and impulse kicks. Both expose the same 61-dimensional local observation and
-seven-action interface.
-
-\begin{longtable}{lll}
-\toprule Group & Field & Phase 2 value \\
-\midrule
-Training & algorithm & MAPPO, shared actor / centralized critic \\
-Training & environments / rollout & 32 / 256 \\
-Training & budget & 2,007,040 steps, 245 updates \\
-PPO & $\gamma,\lambda$, clip & 0.99, 0.95, 0.20 \\
-PPO & actor/critic learning rate & $3\times10^{-4}$, linear decay \\
-PPO & epochs / target KL & 5 / 0.03 \\
-Model & actor / critic & $128^2$ / $256^2$ Tanh \\
-Validation & cadence / episodes & 100,000 steps / 40 fixed episodes \\
-Curriculum & nominal probability & 0.10 \\
-Curriculum & cadence / sample & 20 updates / 5 episodes per profile \\
-Evaluation & standard / transfer & 300 / 100 episodes \\
-Evaluation & profiles & $18\times50=900$ episodes \\
-Evaluation & delay--noise grid & $5\times5\times20=500$ episodes \\
-\bottomrule
-\end{longtable}
-The resolved YAML stored with each run is authoritative.
-
-\section{Perturbation profiles and curriculum}
-The 17 non-nominal profiles comprise low, medium, and high action delay; low, medium, and high
-observation noise; low, medium, and high communication impairment; weak and strong kicks; low and
-high ball friction; slow and fast movement; and combined moderate/severe conditions. Uniform DR selects uniformly from
-these profiles outside the 0.10 nominal fraction. Failure-directed DR uses the same candidates but
-updates a distribution from a failure-rate exponential moving average.
-
-There are 12 FDR updates (updates 20 through 240) and 204 history rows. At update 240 the conditional
-non-nominal distribution spans 0.0359--0.0823, with entropy 2.7946 versus maximum
-$\log(17)=2.8332$. High delay is largest (probability 0.0823; smoothed failure 0.997), followed by
-low ball friction (0.0790), medium observation noise (0.0771), and the two combined profiles
-(0.0732/0.0728). Five evaluation episodes per profile give raw rates only in increments of 0.2;
-the update signal is therefore noisy even after smoothing.
-
-\section{Phase 1 provenance retained}
-Phase 1 originally exposed a saturated Pymunk baseline, reflective ball walls, player escape,
-possession normalization above one, a misaggregated defender minimum, and a weak role heuristic.
-Repairs unified terminal classification, added player-only containment, calibrated Pymunk ball
-drag and kicks, normalized metrics once per macro step, separated defender/profile aggregations,
-paired seeds, and tested role logic. The clean Phase 1 run at commit \texttt{16c94cd} passed the
-entry gate: abstract scripted success was 0.03/0.15/0.28 for random/double-chase/role and Pymunk
-success was 0.49/0.68/0.66. Fresh nominal IPPO reached 0.87 against its abstract intercept defender
-but only 0.34 in Pymunk. Phase 2 was launched to address this genuine transfer failure.
-
-\section{Phase 2 run ledger}
-All rows below used commit \texttt{45e80751d4d48ce26f3c74c38e1dc018c713e460}, seed 0, an NVIDIA
-L4, and completed without a recorded exception.
-
-\begingroup
-\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{longtable}{p{1.25in}p{0.85in}p{0.72in}p{0.72in}p{2.40in}}
-\toprule Run directory & Training mode & Final rolling success & Final nominal validation & Frozen evaluations \\
-\midrule
-\texttt{002437 nominal} & nominal & 0.682 & 0.825 & standard, transfer, profiles, grid \\
-\texttt{020456 uniform} & uniform & 0.275 & 0.450 & standard, transfer, profiles, grid \\
-\texttt{033215 FDR} & failure directed & 0.269 & 0.475 & standard, transfer, profiles, grid, six MP4s \\
-\bottomrule
-\end{longtable}
-\endgroup
-
-Training is numerically stable. Initial/final actor entropy is 1.946/0.966, 1.946/1.405, and
-1.945/1.364 for nominal, uniform, and FDR. Maximum approximate KL is 0.00297, 0.00205, and 0.00240;
-maximum clip fraction is 0.0266, 0.0214, and 0.0200. The final actor learning rate is
-$1.22\times10^{-6}$ in every run. These low update magnitudes are not a correctness failure, but
-the nearly exhausted schedule makes a blind extension of seed 0 uninformative.
-
-The metrics CSV repeats the most recent validation values on intervening PPO rows because
-\texttt{final\_validation} remains populated after a validation event. This does not change
-checkpoint selection, but downstream analysis must not count every nonempty row as a new
-validation evaluation.
-
-\section{Audited suite-level results}
-\begin{longtable}{lrrrrrrrr}
-\toprule
-Method & Abs. all & Abs. int. & Transfer & Profiles & Prof. min & Grid & Invalid$^*$ & Chase$^*$ \\
-\midrule
-Nominal & 0.413 & 0.700 & 0.440 & 0.417 & 0.260 & 0.494 & 0.236 & 0.117 \\
-Uniform & 0.337 & 0.500 & 0.380 & 0.416 & 0.160 & 0.346 & 0.381 & 0.100 \\
-FDR & 0.337 & 0.540 & 0.640 & 0.521 & 0.240 & 0.366 & 0.157 & 0.042 \\
-\bottomrule
-\end{longtable}
-\noindent $^*$Invalid-action and redundant-chase fractions are from the 900-episode profile suite. ``Abs.
-all'' averages equal 100-episode defender subsets and is not the matched transfer reference;
-``Abs. int.'' is the relevant nominal-intercept reference.
-
-Canonical abstract-intercept to Pymunk gaps are $+0.260$ for nominal (0.700 to 0.440), $+0.120$
-for uniform (0.500 to 0.380), and $-0.100$ for FDR (0.540 to 0.640). A negative gap is not
-automatically superior robustness because Pymunk can be easier for a given policy; direct method
-comparisons within identical Pymunk scenarios are more defensible.
-
-\subsection{Paired conditional tests}
-On identical Pymunk transfer seeds, FDR versus nominal has 33 FDR-only successes and 13
-nominal-only successes (two-sided exact McNemar $p=0.00453$); versus uniform it has 38 and 12
-($p=0.000306$). Across profile episodes the corresponding counts are 278/184
-($p=1.42\times10^{-5}$) and 242/147 ($p=1.68\times10^{-6}$). Across grid episodes, however, FDR
-loses to nominal 98/162 ($p=8.66\times10^{-5}$) and is not detectably different from uniform at
-118/108 ($p=0.549$). These tests condition on the three actors; they do not quantify variability
-over training seeds.
-
-Against the clean Phase 1 heuristics on the same 100 nominal Pymunk seeds, FDR scores 0.640 versus
-0.490 random, 0.680 double chase, and 0.660 role based. FDR-only/baseline-only discordant counts and
-exact $p$-values are 34/19 ($p=0.0534$), 18/22 ($p=0.636$), and 20/22 ($p=0.878$), respectively.
-Thus FDR clearly improves over learned MAPPO controls in this pilot but does not beat the deliberate
-heuristics.
-
-\subsection{Per-profile success}
-\begin{longtable}{lrrr}
-\toprule Profile & Nominal & Uniform & FDR \\
-\midrule
-action delay low & 0.420 & 0.600 & 0.580 \\
-action delay medium & 0.480 & 0.240 & 0.240 \\
-action delay high & 0.520 & 0.420 & 0.260 \\
-observation noise low & 0.340 & 0.380 & 0.640 \\
-observation noise medium & 0.300 & 0.320 & 0.380 \\
-observation noise high & 0.260 & 0.480 & 0.400 \\
-communication low & 0.440 & 0.540 & 0.640 \\
-communication medium & 0.420 & 0.500 & 0.620 \\
-communication high & 0.360 & 0.500 & 0.580 \\
-kick weak & 0.320 & 0.440 & 0.520 \\
-kick strong & 0.340 & 0.340 & 0.540 \\
-ball friction low & 0.260 & 0.340 & 0.400 \\
-ball friction high & 0.760 & 0.660 & 0.760 \\
-movement slow & 0.360 & 0.440 & 0.620 \\
-movement fast & 0.360 & 0.400 & 0.820 \\
-combined moderate & 0.580 & 0.160 & 0.380 \\
-combined severe & 0.540 & 0.240 & 0.320 \\
-nominal & 0.440 & 0.480 & 0.680 \\
-\bottomrule
-\end{longtable}
-FDR beats nominal on 12 of 18 profiles but loses on medium/high action delay and both combined
-profiles. That concentration identifies the immediate mechanism question.
-
-\subsection{Delay--noise matrices}
-Rows below are action delays 0--4; columns are localization-noise standard deviations
-$0,0.02,0.05,0.10,0.15$.
-
-\begin{center}\small
-\begin{tabular}{c|ccccc@{\qquad}c|ccccc}
-\multicolumn{6}{c}{Nominal MAPPO} & \multicolumn{6}{c}{Uniform DR MAPPO}\\
-$d$ & 0 & .02 & .05 & .10 & .15 & $d$ & 0 & .02 & .05 & .10 & .15\\
-\midrule
-0&.45&.60&.40&.05&.35&0&.40&.30&.40&.45&.35\\
-1&.45&.35&.35&.50&.40&1&.30&.40&.35&.45&.55\\
-2&.50&.40&.55&.70&.50&2&.30&.35&.15&.30&.25\\
-3&.70&.45&.60&.55&.50&3&.40&.15&.35&.25&.45\\
-4&.60&.50&.75&.65&.50&4&.35&.25&.30&.45&.40\\
-\end{tabular}
-
-\vspace{0.6em}
-\begin{tabular}{c|ccccc}
-\multicolumn{6}{c}{Failure-directed MAPPO}\\
-$d$ & 0 & .02 & .05 & .10 & .15\\
-\midrule
-0&.75&.65&.70&.60&.55\\
-1&.55&.25&.30&.35&.45\\
-2&.30&.10&.20&.45&.20\\
-3&.25&.30&.20&.30&.55\\
-4&.25&.25&.20&.30&.15\\
-\end{tabular}
-\end{center}
-
-FDR is strongest at zero delay and collapses after delay is introduced. Nominal improves with
-larger delay in many cells, which is counterintuitive. Candidate explanations are action smoothing
-of a rapidly switching nominal policy, interaction between action repeat and queue length, or a
-queue/reset implementation defect. No explanation should be selected without deterministic action
-traces.
-
-\section{Termination and cooperation audit}
-\begin{longtable}{llrrrrr}
-\toprule Suite & Method & Goal & OOB & Clear & Stationary & Timeout \\
-\midrule
-Abstract standard & nominal &124&93&82&1&0\\
- & uniform &101&123&75&1&0\\
- & FDR &101&101&81&15&2\\
-Pymunk transfer & nominal &44&33&22&1&0\\
- & uniform &38&32&20&10&0\\
- & FDR &64&23&11&2&0\\
-Pymunk profiles & nominal &375&319&172&34&0\\
- & uniform &374&238&158&130&0\\
- & FDR &469&203&130&98&0\\
-Pymunk grid & nominal &247&174&71&8&0\\
- & uniform &173&109&92&126&0\\
- & FDR &183&104&95&118&0\\
-\bottomrule
-\end{longtable}
-Uniform and FDR reduce some out-of-bounds failures but introduce many stationary-ball failures in
-the profile/grid suites. This is another robustness trade-off hidden by overall success alone.
-
-Valid completed/attempted pass counts are:
-\begin{center}
-\begin{tabular}{lrrr}
-\toprule Suite & Nominal & Uniform & FDR \\
-\midrule
-Abstract standard & 0/0 & 4/4 & 1/1 \\
-Pymunk transfer & 0/0 & 0/1 & 0/0 \\
-Pymunk profiles & 5/12 & 29/71 & 4/6 \\
-Pymunk grid & 6/6 & 30/60 & 2/4 \\
-\bottomrule
-\end{tabular}
-\end{center}
-Large-looking completion rates such as 1.0 are therefore denominator artifacts. FDR's low
-redundant-chase fraction is evidence of spatial role differentiation, not of passing cooperation.
-A constrained pass-needed evaluation is required.
-
-\section{Video inventory and interpretation}
-The FDR directory contains abstract successes at seeds 50,000 and 50,001, an abstract
-out-of-bounds failure at 50,002, Pymunk successes at 50,000 and 50,001, and a Pymunk
-out-of-bounds failure at 50,004. The clips show brief approach/shoot behavior and a second attacker
-maintaining separation. They verify simulator rendering and terminal labels but are selected
-examples and contain no evidence of a learned passing sequence. Nominal and uniform Phase 2 runs
-contain only render-check images, so a fair behavioral comparison still needs matched same-seed
-videos for all methods.
-
-\section{Comparison/export defect and repair}
-The pilot comparison-row collector retained each suite, but its LaTeX exporter and plotter grouped
-by only \texttt{method, simulator}. That mixed transfer, profile, robustness, historical Phase 1,
-and duplicate-run rows. The defect affected presentation, not the underlying episode files. The
-new comparison path carries \texttt{evaluation\_name}, training seed, and source run; aggregates
-only within an exact suite; deduplicates manifests; and pairs canonical abstract-intercept and
-Pymunk-transfer rows from the same run. It emits raw, suite-level, canonical-gap, and seed-level
-replication CSV/JSON files. Automated tests guard both suite isolation and canonical pairing.
-
-\section{Ranked execution backlog and stop rules}
-All P0 infrastructure and the conditional execution logic below are now implemented in the
-cleaned Phase 2 notebook. Local validation passes all 54 tests. The isolated production delay
-audit passes all 12 simulator/latency cases (two simulators times latencies 0--5); policy-dependent
-matched traces still require the Drive checkpoints in Colab. P1 training and evaluation remain to
-be executed by running the notebook cells in order.
-\begin{longtable}{p{0.48in}p{1.60in}p{3.80in}}
-\toprule Priority & Work item & Required output / decision \\
-\midrule
-P0.1 & Delay trace audit & Implemented unit tests and per-step chosen/queued/executed action traces for delays
-0--5, macro repeat, and reset. Explain or fix nominal's improvement with delay before training. \\
-P0.2 & Suite-safe reporting & Implemented exact-suite grouping; canonical transfer gap only; pass counts and
-denominators; automated regression test; retire mixed aggregate plots. \\
-P0.3 & Fresh confirmation seeds & 130k/140k marked exploratory; untouched abstract and
-Pymunk ranges before any tuning. Store the protocol with the run manifest. \\
-P0.4 & Cooperation probe & Implemented mirrored blocked-shot/pass-needed scenarios with opportunity, attempt,
-completion, receiver-possession, and post-pass-goal metrics; matched videos for all actors. \\
-P1.1 & Replicate main effect & Train seeds 1 and 2 for all three methods: six new jobs. Report
-per-seed values and seed-aware intervals, not only pooled episodes. \\
-P1.2 & Predeclared gate & FDR must beat both controls on 18-profile Pymunk mean, be no more than
-0.05 below nominal grid AUC, and be no more than 0.10 below nominal abstract-intercept success. \\
-P1.3 & Escalation rule & If direction holds in at least two of three seeds, expand to five seeds.
-Otherwise stop broad runs and diagnose/report the negative result. \\
-P1.4 & Targeted ablation & Conditionally run FDR with action latency neutralized in every training
-profile, including combined profiles. Compare noisy five-episode curriculum
-updates with a better-estimated or uncertainty-aware alternative. Consider recurrence only if
-delay semantics are correct and memory remains the likely bottleneck. \\
-P2 & Story package & Suite-specific plots, per-seed intervals, failure taxonomy, matched videos,
-exact command manifest, and claim/boundary text. \\
-P3 & Higher fidelity & Only after P1 gate: third simulator/Webots. Physical work additionally
-requires perception, localization, low-level safe locomotion, kicks, watchdogs, and trial logs. \\
-\bottomrule
-\end{longtable}
-
-Avoid extending seed 0, tuning on inspected evaluation seeds, launching all three ablations,
-hyperparameter sweeps without a hypothesis, episode-level significance claims without training
-replication, full-game/self-play expansion, and any physical sim-to-real wording.
-
-\section{Reproducibility checklist for the next run}
+\section{Phase 2 provenance}
+The authoritative Phase 2 aggregate is printed in cell 22 of
+\path{notebooks/phase2_training_transfer_report.ipynb}. Nine runs completed:
 \begin{itemize}
-\item Run from a clean commit; the resolved YAML, six training commands, and evaluation seed ranges are frozen.
-\item Run formatting/tests, both simulator API checks, a delay-trace regression, and smoke training.
-\item Preserve checkpoints in Drive; sync logs/configs/JSON/CSV/plots/videos to the Mac.
-\item Save completed and failed runs immediately in each training/evaluation cell.
-\item Evaluate frozen best checkpoints with no normalizer updates or post-test selection.
-\item Report every seed, failed job, episode denominator, per-suite aggregate, tail metric, and
-seed-aware interval.
-\item Compile both reports locally or install a LaTeX toolchain in Colab; a missing report build is
-not an experiment failure but must be recorded.
-\item Describe Pymunk as sim-to-sim and separate role separation from passing cooperation.
+\item seed 0: \texttt{002437 nominal}, \texttt{020456 uniform}, \texttt{033215 FDR};
+\item seed 1: \texttt{082453 nominal}, \texttt{095311 uniform}, \texttt{112147 FDR};
+\item seed 2: \texttt{151725 nominal}, \texttt{175954 uniform}, \texttt{192845 FDR}.
 \end{itemize}
+The local lightweight archive currently contains only the seed-0 directories. The locked file
+\path{reports/phase2_confirmatory_summary.json} records the exact per-seed notebook values,
+missing local paths, seed bases, baseline source, and decision. The LaTeX table is generated from
+that JSON by \texttt{python -m scripts.export\_phase2\_report}; it is not a hand-maintained copy.
 
-\section{Final audit statement}
-The current results are promising and internally coherent enough to justify continued focused
-work. They are not clean enough to justify a broad robustness claim. The strongest positive result
-is FDR's 0.640 canonical Pymunk transfer and 0.521 profile mean; the strongest negative result is
-its 0.366 grid score versus nominal's 0.494 and its 0.240--0.260 medium/high delay success. The
-next milestone is not ``more football.'' It is a verified delay mechanism, a real cooperation
-probe, and replicated evidence under a locked analysis plan.
+\IfFileExists{reports/generated_results.tex}
+  {\input{reports/generated_results.tex}}
+  {\input{generated_results.tex}}
+
+\section{Interpretation of the failed gate}
+FDR passes three robustness checks: profile mean superiority, matched-seed direction stability,
+and delay--noise grid non-inferiority. It fails abstract non-inferiority by $0.237$ beyond the
+allowed margin: nominal $0.7633$, FDR $0.4267$, absolute loss $0.3367$, allowed loss $0.10$.
+FDR cooperative success is exactly zero at every seed. The seed-0 delay failure is not stable
+across seeds; \texttt{delay\_failure\_replicated=false} and
+\texttt{delay\_ablation\_authorized=false}. Do not run or report a delay-specific retraining
+ablation under the Phase 2 protocol.
+
+Uniform DR is not a reliable compromise. Its profile standard deviation is $0.210$ and grid
+standard deviation is $0.143$. Its only cooperative result, $0.32$ at seed 2, coincides with poor
+profile/grid performance. The correct story is objective interference plus training-seed
+sensitivity.
+
+\section{Phase 3 fixed interface}
+The maximum roster is three attacker slots and three defender slots. Actual active attackers are
+two or three; actual active defenders are two. Attacker identifiers are stable and zero-padded.
+Every local observation contains:
+\begin{itemize}
+\item self pose, velocity, heading, possession, and slot identity;
+\item ball pose/velocity and recent possession transition;
+\item attacking goal and field-relative geometry;
+\item two teammate slots with presence bits and a message carrying age and validity;
+\item three defender slots with presence bits and relative kinematics;
+\item previous/executed action, scenario marker, clock, and action mask.
+\end{itemize}
+All continuous values use fixed normalizers. Deterministic entity ordering is by stable slot, never
+nearest-neighbor rank. Inactive slots are zero with a presence bit of zero. The global critic state
+uses fixed world-frame slots and includes scenario/roster masks. The old 2-v-1 interface remains
+available through its existing environment; Phase 3 does not silently alter Phase 2 artifacts.
+
+\section{Scenarios and opponent styles}
+\scriptsize
+\begin{tabular}{p{0.29\columnwidth}p{0.57\columnwidth}}
+\toprule Scenario & Intent \\
+\midrule
+\texttt{2v2 open} & Calibrated open attack with goalie and field defender.\\
+\texttt{2v2 pass-required} & Direct lane blocked; a controlled teammate reception is
+required before a goal counts as cooperative success.\\
+\texttt{3v2 open} & Adds a second off-ball option and padded third attacker.\\
+\texttt{3v2 press} & Starts under pressure and mixes defender styles.\\
+\bottomrule
+\end{tabular}
+\normalsize
+
+Defender styles are goalie, lane-block, press, predictive, zonal, and mixed. The goalie stays near
+the goal line and tracks the ball; the field defender uses the selected style. ``Mixed'' samples
+at reset from an explicit probability map and logs the realized style. Opponent actions are
+scripted and excluded from learning-agent tensors.
+
+\section{Calibration gate}
+Calibration runs random, double-chase, and role-based policies in abstract and Pymunk open and
+pass-required scenarios. Optional 3-v-2 cells are diagnostic. The non-negotiable defaults are:
+\begin{align*}
+S_{\text{random,Pymunk}}&\leq0.05,\\
+S_{\text{double,Pymunk}}&\leq0.20,\\
+0.20\leq S_{\text{role,Pymunk}}&\leq0.55,\\
+S_{\text{role,Pymunk}}-S_{\text{random,Pymunk}}&\geq0.15,\\
+S_{\text{direct,pass-required}}&\leq0.05.
+\end{align*}
+Successful median duration must be at least eight seconds and no method/scenario/simulator cell may
+exceed $0.85$. Missing cells, insufficient episode counts, non-finite metrics, or a permissive
+direct shot all fail closed. A 20-episode smoke checks code only. Expensive learning is blocked
+until the configured full-episode calibration passes; smoke noise never authorizes training.
+
+\section{Reward and metric contract}
+Goal and failure rewards remain team-level. Potential shaping uses ball progress and field control.
+Cooperation credit requires events, not action labels:
+\begin{enumerate}
+\item carrier releases a valid pass after controlled possession;
+\item a different attacker controls the ball inside a reception window;
+\item the reception advances field position or improves expected threat;
+\item a subsequent goal inside the chain receives pass-to-goal credit.
+\end{enumerate}
+Selecting pass alone yields no cooperation reward. A receiver identity change, minimum ball travel,
+cooldown, and one-credit-per-transition rule prevent farming. Logs retain attempted/valid/completed
+passes, receptions, chain length, scorer, assister, expected-threat gain, possession switches,
+redundant chasing, action entropy, invalid-mask requests, and terminal reason.
+
+\section{Recurrent MAPPO contract}
+The actor is shared across attacker slots:
+\[
+\begin{aligned}
+e_t &= \mathrm{MLP}_{192,192}(o_t),\\
+h_t &= \mathrm{GRU}_{256}(e_t,h_{t-1}),\\
+\pi(a_t\mid o_{\leq t}) &= \mathrm{softmax}(W h_t).
+\end{aligned}
+\]
+The central value network uses the fixed global state and its own recurrent state. Hidden state has
+shape environment $\times$ maximum-attacker-slot $\times256$ for the actor and environment
+$\times256$ for the critic. An inactive attacker's hidden state is zero. Environment termination
+or truncation resets state; an in-episode match restart does not.
+
+Rollout records observations, global states, sampled and executed actions, action masks, log
+probabilities, rewards, values, valid-slot masks, boundaries, and initial hidden states. Minibatches
+are contiguous $(\text{environment},\text{slot},\text{time})$ chunks. Configurable burn-in rebuilds
+hidden state without loss, then TBPTT applies loss only to valid post-burn-in steps. Advantages are
+normalized across valid samples. The implementation warns on high approximate KL, near-total
+clipping, non-finite gradients, or actor/critic learning rates below their configured minima.
+
+\section{Stage state and resume}
+Nominal stages A--D have cumulative target budgets $0.5$, $1.0$, $1.5$, and $2.0$ million
+environment steps. The smoke config uses tiny overrides. Each checkpoint contains stage name,
+stage/global counters, actor/critic and optimizer weights, observation/state normalizers,
+curriculum state, recurrent-state dimensions, and RNG states. A resume must match observation,
+action, roster, recurrent, and scenario schema versions. A stage may warm-start only from its
+declared predecessor.
+
+\section{Competence-constrained FDR}
+CC-FDR is a fine-tuning phase, never a fresh initialization. It stores the frozen nominal reference
+$R_N^\star$ and uses a configured nominal rehearsal floor (default $0.35$). Failure-profile weights
+use smoothed failure, uniform mixing, and a maximum probability. If validation violates
+$R_N\geq R_N^\star-0.10$, the guard:
+\begin{enumerate}
+\item raises nominal rehearsal toward its configured maximum;
+\item reduces the failure-focus exponent;
+\item logs a guard event and current constraint margin;
+\item prevents an infeasible composite checkpoint from replacing the best feasible one.
+\end{enumerate}
+Reset sampling is split into a nominal group, a dedicated pass-required cooperation group
+(default probability $0.20$), and a randomized robustness group. Only the last group draws a
+failure-weighted perturbation profile.
+The configurable composite score combines nominal, robustness, cooperation, and constraint
+penalty. Separate \texttt{best\_nominal}, \texttt{best\_cooperation},
+\texttt{best\_composite}, and \texttt{final} checkpoint labels avoid one opaque selection rule.
+
+\section{Evaluation gates}
+\textbf{Gate A---calibration.} Every required calibration check passes at the declared episode
+count. \textbf{Gate B---nominal team play.} The recurrent seed-3 policy must meet the locked
+2-v-2, 3-v-2, pass-required cooperation, duration, and meaningful-action thresholds.
+\textbf{Gate C---constrained
+robustness.} CC-FDR improves the robustness aggregate, remains within $0.10$ of the nominal
+reference, and does not reduce cooperative success beyond its margin.
+
+Development uses seed 3 only. Thresholds and checkpoint rules are then frozen. Final experiments
+use seeds 4, 5, and 6, with seed-level mean, standard deviation, and the raw per-seed table.
+
+\section{Throughput and batching}
+Inference batches environment and attacker dimensions. The Phase 3 executor keeps physics
+instances authoritative while performing tensor inference and rollout packing in batches. The
+throughput diagnostic reports reset, environment-step, device-transfer, policy-inference,
+actor/critic optimization, validation, checkpoint/logging I/O, effective transitions/s, and
+memory for 4/8/16 environments by default, with capability
+checks for 128--512 where hardware permits. Equivalence tests compare a single lane with the
+ordinary environment under fixed states and actions. A faster result is not accepted if terminals,
+rewards, masks, or observations diverge.
+
+\section{Artifact and notebook discipline}
+Runs use timestamped directories below \texttt{runs}, with experiment, algorithm, and seed in the
+directory name. Training,
+evaluation, plots, videos, resolved config, metadata, and logs are explicit subtrees. Latest
+pointers prefer repository-relative \texttt{runs/<basename>} values and readers fall back to the
+basename if an old Colab/Mac absolute path is stale. The workspace auditor checks metadata,
+configuration, referenced checkpoints/evaluations, notebook run references, latest pointers,
+duplicate run IDs, and incomplete artifacts without deleting anything.
+
+The Phase 3 notebook has one initialization/install cell, one lightweight restore cell, and then
+independently runnable audit, calibration, throughput, staged-training, evaluation, video, and
+report cells. Training cells call the unbuffered CLI directly so live output remains visible; no
+helper captures a subprocess until it finishes. Long loops use
+\texttt{tqdm(..., file=sys.stdout)} and unbuffered notebook output.
+
+\section{Execution runbook}
+\begin{enumerate}
+\item Install editable package and run Ruff/pytest/workspace audit.
+\item Run calibration smoke; inspect exact failed/passed reasons.
+\item Run full calibration. Stop if Gate A fails.
+\item Run 4/8/16 smoke throughput, then 32--512 lanes on the L4; select a stable measured count.
+\item Train nominal seed 3 stage A; evaluate and resume B, C, then D only if each stage is healthy.
+\item Evaluate frozen nominal best in abstract and Pymunk; record representative matched videos.
+\item Start CC-FDR from that checkpoint; never from random weights.
+\item Evaluate Gate C and inspect constraint-guard history.
+\item Freeze config/protocol. Run seeds 4, 5, and 6.
+\item Regenerate reports from JSON artifacts and compile both PDFs.
+\end{enumerate}
+
+\section{Exact observation and state ledger}
+The observation dimension is 112 for every active attacker. The layout below is a schema contract,
+not a suggestion; changing a field requires a schema-version increment and invalidates direct
+checkpoint resume.
+\begin{center}
+\scriptsize
+\begin{tabular}{p{0.12\columnwidth}p{0.10\columnwidth}p{0.60\columnwidth}}
+\toprule Indices & Width & Content \\
+\midrule
+0--9 & 10 & self pose, velocity, heading, possession, slot/roster \\
+10--17 & 8 & relative ball, ball velocity, touch/pass-chain state \\
+18--21 & 4 & goal vector and scenario flags \\
+22--41 & 20 & two deterministic teammate slots, 10 values each \\
+42--59 & 18 & three deterministic defender slots, 6 values each \\
+60--66 & 7 & previous-action one-hot \\
+67--73 & 7 & executed-action one-hot \\
+74--80 & 7 & legal-action mask \\
+81--84 & 4 & clock, restart, cooperation, profile flags \\
+85--111 & 27 & reserved zero padding for compatible extensions \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{center}
+Each teammate slot begins with a presence bit and includes relative pose/velocity, possession, and
+the last delivered four-value message. Each defender begins with presence and ends with a goalie
+bit. A missing entity contributes exactly zero. Noise is applied to perceived positions, never to
+presence or stable identity. The policy does not receive hidden profile parameters.
+
+The global state dimension is 102. Attacker slots occupy 0--23 (eight values each), defender slots
+24--44 (seven each), ball position/velocity 45--48, possession one-hot 49--52, and scenario/roster,
+clock, and cooperation flags 53--58. Indices 59--101 are reserved. The centralized critic sees
+world-frame values and masks, but its recurrent state and output are discarded during deployment.
+
+\section{Action and transition ledger}
+The seven categorical actions retain Phase 2 names: approach ball, dribble left, dribble right,
+shoot, pass to teammate, move to support, and hold/face ball. Shoot and pass are masked unless the
+agent currently possesses the ball. Pass is masked if no teammate is active or its predicted
+receiver point leaves the field. Illegal requests from
+a baseline or caller are counted and converted to hold; learned logits are masked before sampling,
+so they should not generate such requests.
+
+The exported TorchScript deployment wrapper accepts observation, recurrent state, and the current
+legal-action mask, applies the same invalid-logit rule, and returns masked logits plus the next
+hidden state. Deployment therefore cannot accidentally omit a mask used during training and
+evaluation.
+
+At each macro decision, a legal requested action enters the configured FIFO. The executed command
+is repeated for the configured low-level integration count. Action latency of two therefore
+executes hold, hold, then the first requested command. Reset fills queues with hold. A match restart
+also clears the action queue, because a stale kick should not cross a restart, while recurrent
+policy state remains intact because the multi-restart match episode did not terminate.
+
+Abstract motion applies acceleration-bounded kinematics and explicit ball drag. Pymunk creates
+separate circular rigid bodies and advances its own space with substeps. Both constrain players to
+the playable rectangle, while the ball may cross goal or out-of-bounds lines. Swept defender-ball
+checks prevent high-speed kicks tunnelling through a scripted defender. Defender possession
+challenges and clearances are logged through last-touch state.
+
+The pass-required scenario rejects a direct goal until a valid reception with configured forward
+advance has occurred. A valid pass requires lane clearance, a distinct target, and reception inside
+the window. A goal before the minimum-duration boundary is returned to play rather than counted;
+this ensures the calibration cannot pass using an immediate kickoff exploit. Organized
+lane-block/zonal and aggressive press/predictive styles create different post-pass openings without
+changing the gate by method.
+
+\section{Rollout tensor ledger}
+For rollout length $T$, environment count $E$, and maximum attacker count $A=3$, the trainer saves:
+\begin{center}
+\small
+\begin{tabular}{p{0.57\columnwidth}p{0.27\columnwidth}}
+\toprule Tensor & Shape \\
+\midrule observations & $T\times E\times A\times112$ \\
+global states & $T\times E\times102$ \\
+action masks & $T\times E\times A\times7$ \\
+valid slots/actions/log-probabilities & $T\times E\times A$ \\
+team rewards/values/returns & $T\times E$ \\
+actor hidden snapshots & $T\times E\times A\times H$ \\
+critic hidden snapshots & $T\times E\times H$ \\
+continuation, terminal, truncation & $T\times E$ \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{center}
+The hidden snapshot precedes the action at that time index. An episode reset zeros both actor and
+critic hidden states and sets continuation to zero for the next observation. An in-match goal
+restart changes world state but not the continuation mask. Inactive attacker rows have a valid
+mask of zero and contribute neither policy loss nor entropy.
+
+Actor chunks are keyed by environment and stable attacker slot. Critic chunks are keyed by
+environment. A chunk starts from its recorded hidden snapshot; continuation masks reset recurrent
+state if a later episode boundary lies inside the chunk. Short terminal chunks are padded and
+masked. Advantages normalize only over active entries. Value loss and explained variance operate
+at team/environment granularity. This avoids treating three padded attacker slots as three
+independent team rewards.
+
+\section{Checkpoint and stage invariants}
+A Phase 3 checkpoint contains explicit checkpoint, observation, and state schema versions; actor
+and critic weights; both optimizers; normalization moments; stage/update/step counters; best-score
+records; last validation; curriculum; Python/NumPy/Torch RNG; and the resolved configuration.
+Resume rejects a recurrent hidden-size or schema mismatch. Nominal Stage B resumes Stage A
+optimizer/counters and trains only to its cumulative target; Stage C and D behave analogously.
+
+CC-FDR uses warm start rather than ordinary resume. Warm start copies actor, critic, and
+normalizers, resets the new run counters/optimizers, and reads the frozen nominal validation as the
+constraint reference. A checkpoint without that reference is rejected. Starting
+\texttt{phase3\_cc\_fdr.yaml} with neither \texttt{--warm-start} nor \texttt{--resume} is an error.
+The full recurrent configurations also require a non-smoke calibration JSON with
+\texttt{training\_authorized=true}.
+
+Learning-rate decay has actor and critic minima. Reaching a minimum logs a warning rather than
+silently decaying useful updates to zero. PPO logs approximate KL, clipping fraction, entropy,
+gradient norms, rollout/update time, and effective transitions per second. Non-finite loss or
+gradient raises immediately and triggers an emergency checkpoint attempt.
+
+\section{Calibration interpretation guide}
+A smoke calibration contains 20 episodes per cell and must never authorize training even when all
+observed checks pass. Its purpose is deterministic code coverage and detection of gross
+permissiveness. The full gate uses at least 100 episodes in each of 12 required
+method--simulator--scenario cells.
+
+Random Pymunk success above 0.05 usually means that uncontrolled kick/dribble sequences can cross
+the goal too easily. Double-chase above 0.20 means direct approach-and-shoot remains sufficient.
+Role success below 0.20 means the pass/reception or scripted movement is broken or too difficult;
+above 0.55 means the opponent/task is too predictable. A role--random gap below 0.15 means the
+benchmark cannot distinguish structured coordination. Nonzero double-chase in pass-required play
+means the scenario's direct-shot control is invalid. A short median or any cell above 0.85 is an
+additional saturation warning.
+
+Calibration code writes all episode rows, not only gate values. Before changing geometry, inspect
+terminal reason, pass attempts/validity/receptions, defender style, time, action switches,
+possession switches, redundant chase, and return. A change is acceptable only when it improves the
+intended discrimination in both physics backends and passes the same locked thresholds.
+
+\section{Development evaluation ledger}
+Gate B evaluates frozen best-nominal weights in Pymunk on 2-v-2 open, 3-v-2 open, and 2-v-2
+pass-required scenarios. The required values are respectively 0.55 success, 0.35 success, and 0.30
+cooperative success, plus an eight-second successful median and at least two meaningfully used
+actions. All are computed from episode rows. Abstract results remain useful learning diagnostics
+but cannot substitute for this transfer-facing gate.
+
+Gate C evaluates recurrent nominal and CC-FDR on identical seeds. Profile mean averages the
+declared non-nominal profiles after first reducing each profile. Grid AUC averages the declared
+delay-low, delay-high, localization, and combined cells. Required contrasts are profile improvement
+at least 0.10, nominal drop at most 0.10, grid drop at most 0.05, and cooperative drop at most zero.
+The development seed remains one selected actor and is never included as an independent final
+seed.
+
+When final confirmation becomes authorized, seed 4, seed 5, and seed 6 are launched as separate
+supervised jobs. Their evaluation ranges must be new, and tables first reduce to one metric per
+trained seed. Report mean and sample standard deviation together with the raw three rows. Do not
+bootstrap episodes and label the resulting interval as training-seed uncertainty.
+
+\section{Artifact audit interpretation}
+The workspace auditor is intentionally read-only. An error includes duplicate run identity or a
+missing resolved configuration. Warnings include running/incomplete metadata, stale latest
+pointers, missing referenced lightweight artifacts, and notebook references whose raw run
+directory is absent locally. The last category is expected for the current Phase 2 seed-1/2
+archive, but must remain visible rather than being silently called complete.
+
+New latest pointers store a repository-relative \texttt{runs} path when the configured output root is the
+repository's ordinary \texttt{runs}. The resolver first tries that portable value, then the pointer
+location, then basename recovery. Consequently a historical
+\path{/content/robot-soccer-transfer/runs/} pointer can resolve on a Mac by basename if the same
+run has been synchronized. Drive pointers remain portable and metadata is copied last as the run's
+completion marker.
+
+Colab-to-Drive sync always includes checkpoints/models. Drive-to-Mac sync excludes checkpoint
+directories and known heavy suffixes unless explicitly requested. This is asymmetric by design:
+Colab needs resume state, while the Mac context needs configs, JSON/CSV/logs, plots, reports, and
+videos. Sync merges and never deletes destination-only artifacts.
+
+\section{Failure response matrix}
+\begin{center}
+\small
+\begin{tabular}{p{0.27\columnwidth}p{0.57\columnwidth}}
+\toprule Observation & Required response \\
+\midrule
+Gate A fails & stop; inspect episode rows; repair geometry/baseline; retain thresholds \\
+non-finite recurrent update & stop; keep emergency checkpoint/log; reproduce in smoke \\
+KL repeatedly high & reduce update aggressiveness from declared development config, then rerun seed 3 \\
+entropy collapses before success & inspect masks/reward/action counts; do not add final seeds \\
+passes selected but no receptions & audit target speed, lane validity, receiver behavior, and window \\
+reception credit without transition & correctness bug; invalidate affected run and add regression test \\
+Gate B cooperation fails & keep harder platforms disabled; repair task/credit before CC-FDR \\
+CC-FDR violates floor & verify guard events; raise rehearsal or stop/restore feasible checkpoint \\
+Gate C profile gain absent & report negative mechanism result; do not cherry-pick a profile \\
+artifact cannot regenerate table & remove table from claim until raw artifact is restored \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{center}
+
+\section{Stop conditions}
+Stop rather than spend the next budget if calibration fails, random/direct-shot succeeds too often,
+role play is saturated, gradients are non-finite, PPO KL repeatedly exceeds the threshold, action
+entropy collapses before competence appears, cooperative credit fires without a receiver
+transition, nominal floor guard remains active for consecutive evaluations, or raw artifacts
+cannot regenerate a reported table. Do not respond by weakening gates.
+
+\section{Claim template after future execution}
+If all gates pass, the permissible claim is narrow: recurrent parameter-shared MAPPO learned
+repeatable team play in calibrated small-sided scenarios, and competence-constrained
+failure-directed fine-tuning improved a locked cross-physics robustness metric without exceeding a
+declared nominal-loss margin. If any gate fails, report the mechanism failure and seed variability;
+do not substitute videos, training return, or an easier scenario for the locked outcome.
 
 \end{document}

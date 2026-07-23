@@ -1,0 +1,15 @@
+inherits: phase3_base.yaml
+
+experiment:
+  name: phase3_cc_fdr
+
+phase3:
+  mode: cc_fdr
+  active_stage: stage_d
+
+randomization:
+  mode: failure_directed
+  nominal_probability: 0.40
+
+train:
+  total_steps: 500000
