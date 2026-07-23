@@ -1223,7 +1223,10 @@ class RecurrentMAPPOTrainer:
         source = Path(path)
         if not source.is_file():
             raise FileNotFoundError("Checkpoint does not exist: " + str(source))
-        checkpoint = torch.load(source, map_location=self.device, weights_only=False)
+        # Keep the serialized RNG states on CPU. Model state_dict loading copies
+        # weights to the module device and optimizer loading casts parameter
+        # state, while torch.set_rng_state strictly requires a CPU ByteTensor.
+        checkpoint = torch.load(source, map_location="cpu", weights_only=False)
         if int(checkpoint.get("recurrent_hidden_size", -1)) != self.hidden_size:
             raise ValueError("Recurrent hidden size differs from checkpoint")
         if int(checkpoint.get("phase3_observation_schema", -1)) != 1:

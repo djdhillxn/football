@@ -516,3 +516,32 @@ def test_recurrent_checkpoint_rng_states_are_normalized_to_cpu_byte_tensors():
     assert normalized.is_contiguous()
     with pytest.raises(TypeError, match="must be a torch byte tensor"):
         _cpu_rng_state(torch.ones(4), "invalid RNG state")
+
+
+def test_recurrent_checkpoint_payload_is_loaded_on_cpu(
+    phase3_config, tmp_path, monkeypatch
+):
+    first_root = tmp_path / "first_cpu_load"
+    second_root = tmp_path / "second_cpu_load"
+    _trainer_directories(first_root)
+    _trainer_directories(second_root)
+    first = RecurrentMAPPOTrainer(phase3_config, first_root)
+    try:
+        checkpoint = first.save_checkpoint(first_root / "models" / "cpu_load.pt")
+    finally:
+        first.close()
+    original_load = torch.load
+    observed = []
+
+    def recording_load(*args, **kwargs):
+        observed.append(kwargs.get("map_location"))
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "load", recording_load)
+    second = RecurrentMAPPOTrainer(
+        phase3_config, second_root, resume_path=checkpoint
+    )
+    try:
+        assert observed == ["cpu"]
+    finally:
+        second.close()
