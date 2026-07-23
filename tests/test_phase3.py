@@ -18,6 +18,7 @@ from robosoccer.recurrent import (
     RecurrentCentralCritic,
     RecurrentMAPPOTrainer,
     RecurrentSharedActor,
+    _cpu_rng_state,
 )
 from robosoccer.training import compute_gae
 
@@ -503,3 +504,15 @@ def test_recurrent_checkpoint_round_trip_and_export(phase3_config, tmp_path):
         assert second.current_update == saved["current_update"]
     finally:
         second.close()
+
+
+def test_recurrent_checkpoint_rng_states_are_normalized_to_cpu_byte_tensors():
+    state = torch.get_rng_state()
+    if torch.cuda.is_available():
+        state = state.to("cuda")
+    normalized = _cpu_rng_state(state, "test RNG state")
+    assert normalized.device.type == "cpu"
+    assert normalized.dtype == torch.uint8
+    assert normalized.is_contiguous()
+    with pytest.raises(TypeError, match="must be a torch byte tensor"):
+        _cpu_rng_state(torch.ones(4), "invalid RNG state")

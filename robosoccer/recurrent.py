@@ -35,6 +35,12 @@ from robosoccer.utils import (
 logger = logging.getLogger(__name__)
 
 
+def _cpu_rng_state(state, label):
+    if not torch.is_tensor(state) or state.dtype != torch.uint8:
+        raise TypeError(label + " must be a torch byte tensor")
+    return state.detach().to(device="cpu").contiguous()
+
+
 def plot_phase3_diagnostics(run_dir, curriculum=None):
     path = Path(run_dir) / "logs" / "metrics.csv"
     if not path.is_file():
@@ -1265,9 +1271,15 @@ class RecurrentMAPPOTrainer:
         np.random.set_state(checkpoint["numpy_random_state"])
         self.rng.bit_generator.state = checkpoint["generator_state"]
         random.setstate(checkpoint["python_random_state"])
-        torch.set_rng_state(checkpoint["torch_cpu_rng_state"])
+        torch.set_rng_state(
+            _cpu_rng_state(checkpoint["torch_cpu_rng_state"], "CPU RNG state")
+        )
         if torch.cuda.is_available() and checkpoint.get("torch_cuda_rng_state") is not None:
-            torch.cuda.set_rng_state_all(checkpoint["torch_cuda_rng_state"])
+            cuda_states = [
+                _cpu_rng_state(state, "CUDA RNG state")
+                for state in checkpoint["torch_cuda_rng_state"]
+            ]
+            torch.cuda.set_rng_state_all(cuda_states)
         logger.info(
             "Resumed Phase 3 update %d at %d environment steps from %s",
             self.current_update,
