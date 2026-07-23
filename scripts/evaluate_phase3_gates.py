@@ -1,6 +1,7 @@
 """Evaluate locked recurrent nominal or CC-FDR Phase 3 development gates."""
 
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -9,6 +10,20 @@ import torch
 
 from robosoccer.utils import write_json
 from scripts.evaluate_phase3 import evaluate, load_policy
+
+
+def compact_result_for_console(result):
+    """Hide raw episode rows on stdout while leaving the saved result untouched."""
+    compact = copy.deepcopy(result)
+    for container in [compact, compact.get("nominal"), compact.get("cc_fdr")]:
+        if not isinstance(container, dict):
+            continue
+        rows = container.pop("episode_rows", None)
+        if rows is not None:
+            container["episode_counts"] = {
+                name: len(episodes) for name, episodes in rows.items()
+            }
+    return compact
 
 
 def reduce_rows(rows):
@@ -251,8 +266,13 @@ def main():
         default_output = Path(args.cc_fdr_run) / "eval" / "phase3_gate_c.json"
     output = Path(args.output) if args.output else default_output
     write_json(output, result)
-    print(json.dumps(result, indent=2))
+    print(json.dumps(compact_result_for_console(result), indent=2))
+    print(f"Full episode-level gate artifact: {output}")
     if not result["passed"]:
+        print(
+            f"Gate {result['gate']} did not pass; the artifact was saved before "
+            "the fail-closed exit."
+        )
         raise SystemExit(2)
 
 

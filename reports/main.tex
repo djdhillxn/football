@@ -10,7 +10,7 @@
 \setlength{\emergencystretch}{2em}
 \title{\vspace{-1.2em}From Robust Skill Selection to Recurrent Robot-Soccer Team Play}
 \author{Research software report}
-\date{22 July 2026}
+\date{23 July 2026}
 
 \begin{document}
 \maketitle
@@ -27,7 +27,10 @@ zero in all three failure-directed actors. Phase 2 therefore establishes a real 
 trade-off, not a successful team-play policy. Phase 3 is a targeted redesign: calibrated 2-v-2
 and 3-v-2 tasks, a recurrent shared actor and recurrent centralized critic, staged nominal
 training, and competence-constrained failure-directed fine-tuning. The failed Phase 2 actor is
-not promoted and no Phase 3 empirical result is claimed before the new gates are run.
+not promoted. Phase 3 development seed 3 passed the full calibration gate and completed all four
+nominal stages. Its frozen Stage-D policy passed four of five nominal-transfer checks, including
+$0.61$ pass-required cooperative success and $0.75$ 3-v-2 success, but failed locked Gate B
+because 2-v-2 open success was $0.49<0.55$. CC-FDR is therefore correctly blocked.
 \end{abstract}
 
 \section{Research contract}
@@ -161,13 +164,15 @@ cooperation stream.
 
 Reward shaping provides controlled-reception, pass-advance, and pass-to-goal credit but no reward
 for merely selecting ``pass.'' Cooldowns and possession-transition checks prevent stationary pass
-farming. Evaluation still reports the unshaped outcomes: goals, valid attempts, completed
+credit from repeating without a new transition; executed results must still be audited for
+cyclic pass churning. Evaluation reports the unshaped outcomes: goals, valid attempts, completed
 receptions, possession chains, expected-threat gain, redundant chasing, and worst-profile success.
 
 \section{Decision gates and run order}
 Gate A is calibration. Gate B is nominal team play: the recurrent actor must beat role-based
-control on the declared team-play score, show nonzero pass-needed success across development
-episodes, and avoid degenerate action or possession patterns. Gate C is constrained robustness:
+control and meet the locked Pymunk thresholds: 2-v-2 open success $0.55$, 3-v-2 open success
+$0.35$, pass-required cooperation $0.30$, median successful sequence duration eight seconds, and
+at least two meaningful actions. Gate C is constrained robustness:
 failure-directed fine-tuning must improve the declared robustness aggregate while staying within
 the nominal floor. Development uses seed 3. Only after mechanisms and thresholds are frozen are
 seeds 4, 5, and 6 used for final estimates.
@@ -177,6 +182,43 @@ calibration gate; run throughput diagnostics; train staged nominal seed 3; evalu
 backends and inspect videos; fine-tune CC-FDR from the selected nominal checkpoint; then freeze the
 protocol and run seeds 4--6. Harder simulation or hardware is considered only if all three gates
 pass.
+
+\section{Phase 3 development result}
+The full 100-episode-per-cell calibration passed every locked check. In Pymunk 2-v-2 open play,
+random, double-chase, and role-based success were $0.01$, $0.03$, and $0.26$; double-chase scored
+zero in pass-required play. The benchmark is therefore difficult, policy-sensitive, and protected
+against the direct-shot control. Throughput reached $337.45$ transitions/s at 128 environments and
+then plateaued, so 128 was a reasonable operating point rather than a claimed algorithmic result.
+
+Seed-3 nominal training completed $2{,}007{,}040$ cumulative steps. Abstract validation progressed
+to $1.00$ nominal and cooperative success, with finite optimization, final entropy $0.517$,
+approximate KL $0.0011$, and explained variance $0.857$. External Pymunk probes were less
+saturated: Stage A achieved $0.43$ in 2-v-2 open and Stage B achieved $0.37$ in pass-required
+play. The frozen Stage-D Gate-B results were:
+\begin{center}
+\scriptsize
+\begin{tabular}{lrrr}
+\toprule Check & Observed & Required & Pass \\
+\midrule
+2-v-2 open success & 0.49 & 0.55 & no \\
+3-v-2 open success & 0.75 & 0.35 & yes \\
+pass-required cooperation & 0.61 & 0.30 & yes \\
+successful duration (s) & 17.2 & 8.0 & yes \\
+meaningful actions & 6.19 & 2.0 & yes \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{center}
+This is a near miss in aggregate competence and a substantial improvement in identifiable
+cooperation, but Gate B is conjunctive. It did not pass.
+
+The aggregate hides a serious style gap. In 2-v-2 open play, success was $1.00$ against press,
+$0.483$ against zonal, $0.333$ against lane-block, and $0.053$ against predictive defense.
+Lane-block episodes averaged 93.1 pass attempts and a high shaped return despite only $0.333$
+success. That pattern does not prove a correctness bug, but it is consistent with cyclic pass
+reward harvesting and shows that return or pass completion cannot stand in for scoring. The next
+action is a frozen-policy event/video audit and targeted diagnostic evaluation, not CC-FDR,
+harder physics, final seeds, threshold relaxation, or an automatic full retraining.
 
 \section{Experiment ledger and evidence boundary}
 Table~\ref{tab:ledger} separates completed evidence from executable but unrun work. This is
@@ -194,11 +236,12 @@ Phase 2 pilot & complete & three equal-budget seed-0 actors; suite-specific CSV/
 failure direction is promising but a single actor is exploratory \\
 Phase 2 confirmation & complete & nine actors; locked per-seed summary; untouched evaluation
 ranges; automated gate & profile/grid robustness improves, nominal competence and cooperation fail \\
-Phase 3 software & implemented & finite recurrent smoke updates; checkpoint/export; calibration
-smoke; tests; artifact audit; 15-second video & the protocol is executable; no policy-performance
-claim \\
-Phase 3 development & not run & future full calibration, Stage A--D, Gate B and Gate C artifacts &
-no conclusion until saved JSON gates exist \\
+Phase 3 software & implemented & recurrent smoke/resume/export tests; full calibration; staged
+training and fail-closed gate tooling & the protocol is executable and retained failed-gate
+evidence \\
+Phase 3 development & stopped at Gate B & seed-3 Stage A--D logs; 2.01M steps; three
+100-episode Pymunk cells; five locked checks & cooperation is promising, but nominal transfer is
+not yet competent enough for CC-FDR \\
 Phase 3 confirmation & disabled & future new seeds 4, 5, 6 after the protocol freezes & no
 multi-seed recurrent claim \\
 \bottomrule
@@ -236,10 +279,11 @@ architecture or compute advantage.
 
 \subsection{Failure-contingent next actions}
 If Gate A fails, modify task geometry or scripted behavior and rerun calibration; never alter the
-threshold after seeing a learned policy. If Gate B fails with healthy optimization, inspect action
-masks, reception events, possession chains, and videos before adding compute. If nominal learning
-succeeds but cooperation does not, revise the pass-needed opportunity or temporal credit while
-retaining direct-shot controls. If Gate C improves robustness but violates the floor, treat the
+threshold after seeing a learned policy. Gate A passed. Gate B failed with healthy optimization,
+so inspect predictive-defense failures, lane-block pass cycles, reception events, possession
+chains, and matched videos before adding compute. If a correctness defect is found, invalidate and
+rerun the affected nominal stages; otherwise make one predeclared seed-3 intervention aimed at
+2-v-2 transfer competence and repeat Gate B. If Gate C improves robustness but violates the floor, treat the
 competence guard as insufficient; increase rehearsal or stop fine-tuning, then rerun seed 3 before
 any final seed. If all gates pass, freeze code/config hashes before seeds 4--6.
 
@@ -253,10 +297,14 @@ provenance, videos, and separate nominal/robustness checkpoints. Three final see
 sample; conclusions must report seed-level dispersion.
 
 \section{Present status}
-The codebase is advancing in the intended direction, but the scientific result remains Phase 2:
-robustness can be redirected, with a substantial and unacceptable competence cost. Phase 3 is an
-implemented experimental protocol, not a completed experiment. No full training has been run and
-no Phase 3 result should be cited until the calibration and competence gates pass.
+The project is advancing toward the stated objective rather than merely accumulating benchmarks:
+the calibrated task is nontrivial, recurrent nominal training is stable, and the policy now
+exhibits substantial pass-required cooperation in independent Pymunk physics. However, Phase 3
+development is not complete. Gate B failed one locked competence threshold and exposed severe
+defender-style variation plus a possible pass-churning incentive. The current decision is
+\emph{diagnose and repair seed 3}; CC-FDR, harder simulation, and seed-4/5/6 confirmation remain
+disabled. This preserves the end objective---robust transfer without loss of useful cooperative
+football---instead of optimizing a favorable subset of metrics.
 
 \bibliographystyle{plain}
 \IfFileExists{reports/references.bib}

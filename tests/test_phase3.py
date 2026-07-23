@@ -21,11 +21,26 @@ from robosoccer.recurrent import (
     _cpu_rng_state,
 )
 from robosoccer.training import compute_gae
+from scripts.evaluate_phase3_gates import compact_result_for_console
 
 
 @pytest.fixture(scope="module")
 def phase3_config():
     return load_config("configs/phase3_smoke.yaml")
+
+
+def test_phase3_gate_console_summary_preserves_saved_episode_rows():
+    result = {
+        "gate": "C",
+        "nominal": {"episode_rows": {"nominal": [{"success": 1}]}},
+        "cc_fdr": {"episode_rows": {"combined": [{"success": 0}, {"success": 1}]}},
+        "passed": False,
+    }
+    compact = compact_result_for_console(result)
+    assert "episode_rows" in result["nominal"]
+    assert "episode_rows" not in compact["nominal"]
+    assert compact["nominal"]["episode_counts"] == {"nominal": 1}
+    assert compact["cc_fdr"]["episode_counts"] == {"combined": 2}
 
 
 @pytest.mark.parametrize("simulator", ["abstract", "pymunk"])

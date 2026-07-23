@@ -10,7 +10,7 @@
 \setlength{\emergencystretch}{2em}
 \title{\vspace{-1.2em}Robot-Soccer Transfer: Technical Surrogate and Runbook}
 \author{Auditable implementation notes}
-\date{22 July 2026}
+\date{23 July 2026}
 
 \begin{document}
 \maketitle
@@ -20,10 +20,12 @@ This document is the technical companion to the public report. It records exact 
 limitations, interfaces, gates, and the intended execution order. It deliberately distinguishes
 implemented machinery, smoke validation, and completed scientific experiments.
 
-\textbf{Completed evidence:} Phase 1 baseline gate and Phase 2 three-seed confirmation.
+\textbf{Completed evidence:} Phase 1 baseline gate, Phase 2 three-seed confirmation, and Phase 3
+seed-3 calibration plus nominal Stages A--D.
 \textbf{Current decision:} Phase 2 failed overall because nominal competence and cooperation gates
-failed. \textbf{Implemented next experiment:} recurrent team-play Phase 3. \textbf{Not completed:}
-full Phase 3 training or final seed-4/5/6 evaluation.
+failed. Phase 3 Gate A passed, but Gate B failed one of five locked checks: Pymunk 2-v-2 open
+success was $0.49<0.55$. \textbf{Not authorized:} CC-FDR, Gate C, harder physics, or final
+seed-4/5/6 evaluation.
 
 \section{Phase 2 provenance}
 The authoritative Phase 2 aggregate is printed in cell 22 of
@@ -179,6 +181,79 @@ reference, and does not reduce cooperative success beyond its margin.
 Development uses seed 3 only. Thresholds and checkpoint rules are then frozen. Final experiments
 use seeds 4, 5, and 6, with seed-level mean, standard deviation, and the raw per-seed table.
 
+\section{Phase 3 seed-3 development record}
+The authoritative compact record is
+\path{reports/phase3_development_summary.json}. Full Gate-A and Gate-B summaries are also retained
+in executed notebook cells 12 and 22. The current Mac archive contains an older
+\path{runs/phase3_calibration} smoke artifact with 20 episodes per cell; it is not the full Gate-A
+artifact and must not replace the notebook's 100-episode evidence.
+
+\begin{center}
+\scriptsize
+\begin{tabular}{lrrrr}
+\toprule Stage & Steps & Updates & Last N & Last C \\
+\midrule
+A & 507,904 & 62 & 0.550 & 0.700 \\
+B & 1,007,616 & 123 & 0.675 & 0.525 \\
+C & 1,507,328 & 184 & 0.975 & 1.000 \\
+D & 2,007,040 & 245 & 1.000 & 1.000 \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{center}
+These are abstract validation values from a single development actor, not independent seed
+estimates. The Stage-D final update had entropy $0.5173$, approximate KL $0.00106$, clipping
+fraction $0.00763$, and explained variance $0.8566$. Logs contain no non-finite update or high-KL
+stop. Learning-rate-floor messages are declared scheduler diagnostics; the Matplotlib/TorchScript
+deprecation warnings do not explain Gate B. A zero success field in an individual terminal
+rollout row in Stage B is also not a complete evaluation; the separate 100-episode Pymunk
+pass-required evaluation was $0.37$.
+
+The full calibration passed all nine checks at 100 episodes per required cell. Pymunk 2-v-2 open
+success was random $0.01$, double-chase $0.03$, and role $0.26$; direct-shot double-chase success
+in pass-required play was zero. The throughput diagnostic selected 128 environments at $337.45$
+transitions/s. Values at 256 and 512 were essentially flat while wall time increased, showing a
+physics/CPU plateau rather than a GPU failure.
+
+The frozen Stage-D best-nominal checkpoint was evaluated for 100 episodes per scenario with seed
+base 350000:
+\begin{center}
+\scriptsize
+\begin{tabular}{lrrr}
+\toprule Gate-B check & Obs. & Min. & Pass \\
+\midrule
+2-v-2 open success & 0.49 & 0.55 & fail \\
+3-v-2 open success & 0.75 & 0.35 & pass \\
+pass-required coop. & 0.61 & 0.30 & yes \\
+successful duration & 17.2 s & 8.0 s & pass \\
+meaningful actions & 6.19 & 2.0 & yes \\
+\bottomrule
+\end{tabular}
+\normalsize
+\end{center}
+The CLI's exit code 2 and the notebook's former assertion were therefore the intended fail-closed
+gate response, not an evaluator or checkpoint exception. The original notebook cell placed Drive
+sync after the assertion, so the raw JSON remained in the Colab runtime and notebook output but
+was absent from the lightweight Mac archive. The repaired cell now saves and syncs first, displays
+the checks without a red assertion traceback, and stores \texttt{GATE\_B\_PASSED}. The CC-FDR cell
+independently reads the JSON and refuses to train unless it passed. Console output omits raw
+episode rows, while the JSON retains them.
+
+\subsection{Critical diagnosis}
+The result is promising cooperation, not nominal graduation. Stage B's Pymunk pass-required
+success rose from $0.37$ to Stage D's $0.61$, and the learned actor substantially exceeds the
+role baseline in open play ($0.49$ versus $0.26$). Yet the locked gate is conjunctive and the
+abstract-to-Pymunk gap is large.
+
+The 2-v-2 aggregate is brittle by defender style: lane-block $0.333$, predictive $0.053$, press
+$1.000$, and zonal $0.483$. Predictive episodes average 7.32 out-of-bounds events. Lane-block
+episodes average 93.15 pass attempts and 91.96 receptions, a shaped return of $36.32$, but only
+$0.333$ success. This can be legitimate repeated possession transitions, so the existing
+one-transition test is not disproved; nevertheless it is a strong reward-churning warning. The
+3-v-2 aggregate also averages 43.88 collisions and 4.82 out-of-bounds events per match. Before
+changing training, inspect matched videos and episode timelines for these cases and compare
+unshaped goal/terminal outcomes with shaped reward components.
+
 \section{Throughput and batching}
 Inference batches environment and attacker dimensions. The Phase 3 executor keeps physics
 instances authoritative while performing tensor inference and rollout packing in batches. The
@@ -210,9 +285,11 @@ helper captures a subprocess until it finishes. Long loops use
 \item Run calibration smoke; inspect exact failed/passed reasons.
 \item Run full calibration. Stop if Gate A fails.
 \item Run 4/8/16 smoke throughput, then 32--512 lanes on the L4; select a stable measured count.
-\item Train nominal seed 3 stage A; evaluate and resume B, C, then D only if each stage is healthy.
-\item Evaluate frozen nominal best in abstract and Pymunk; record representative matched videos.
-\item Start CC-FDR from that checkpoint; never from random weights.
+\item Train nominal seed 3 stage A; evaluate and resume B, C, then D only if each stage is healthy
+(completed).
+\item Evaluate frozen nominal best in abstract and Pymunk; Gate B failed, so record matched
+success/failure videos and diagnose by defender style (current step).
+\item Start CC-FDR from that checkpoint only after Gate B passes; it is currently blocked.
 \item Evaluate Gate C and inspect constraint-guard history.
 \item Freeze config/protocol. Run seeds 4, 5, and 6.
 \item Regenerate reports from JSON artifacts and compile both PDFs.
@@ -401,7 +478,8 @@ KL repeatedly high & reduce update aggressiveness from declared development conf
 entropy collapses before success & inspect masks/reward/action counts; do not add final seeds \\
 passes selected but no receptions & audit target speed, lane validity, receiver behavior, and window \\
 reception credit without transition & correctness bug; invalidate affected run and add regression test \\
-Gate B cooperation fails & keep harder platforms disabled; repair task/credit before CC-FDR \\
+Gate B any criterion fails & sync the full artifact; keep CC-FDR/harder platforms disabled;
+diagnose frozen-policy events before retraining \\
 CC-FDR violates floor & verify guard events; raise rehearsal or stop/restore feasible checkpoint \\
 Gate C profile gain absent & report negative mechanism result; do not cherry-pick a profile \\
 artifact cannot regenerate table & remove table from claim until raw artifact is restored \\
@@ -423,5 +501,9 @@ repeatable team play in calibrated small-sided scenarios, and competence-constra
 failure-directed fine-tuning improved a locked cross-physics robustness metric without exceeding a
 declared nominal-loss margin. If any gate fails, report the mechanism failure and seed variability;
 do not substitute videos, training return, or an easier scenario for the locked outcome.
+
+The current permissible Phase 3 claim is narrower: one development-seed recurrent actor learned
+substantial cooperative small-sided behavior and passed four of five transfer-facing competence
+checks, but failed nominal Gate B and was not advanced to robust fine-tuning or confirmation.
 
 \end{document}

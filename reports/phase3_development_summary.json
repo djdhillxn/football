@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "development_seed": 3,
+  "decision": {
+    "gate_a_passed": true,
+    "gate_b_passed": false,
+    "cc_fdr_authorized": false,
+    "final_seed_confirmation_authorized": false,
+    "reason": "The frozen Stage-D best-nominal checkpoint scored 0.49 on Pymunk 2v2 open play, below the locked Gate-B minimum of 0.55."
+  },
+  "gate_a": {
+    "smoke": false,
+    "training_authorized": true,
+    "episodes_per_cell": 100,
+    "seed_base": 310000,
+    "checks_passed": 9,
+    "checks_total": 9,
+    "pymunk_2v2_open_success": {
+      "random": 0.01,
+      "double_chase": 0.03,
+      "role_based": 0.26
+    },
+    "pymunk_2v2_pass_required_success": {
+      "double_chase": 0.0,
+      "role_based": 0.33
+    }
+  },
+  "throughput": {
+    "selected_num_envs": 128,
+    "effective_transitions_per_second": 337.4535199237124,
+    "observation": "Throughput plateaus at approximately 337 transitions/s from 128 through 512 environments; environment stepping is the dominant cost."
+  },
+  "nominal_stages": [
+    {
+      "stage": "A",
+      "run_id": "20260723_070824_phase3_recurrent_nominal_mappo_seed3",
+      "environment_steps": 507904,
+      "updates": 62,
+      "last_abstract_nominal_success": 0.55,
+      "last_abstract_cooperation_success": 0.7,
+      "best_abstract_nominal_success": 0.85,
+      "best_abstract_cooperation_success": 0.925
+    },
+    {
+      "stage": "B",
+      "run_id": "20260723_083425_phase3_recurrent_nominal_mappo_seed3",
+      "environment_steps": 1007616,
+      "updates": 123,
+      "last_abstract_nominal_success": 0.675,
+      "last_abstract_cooperation_success": 0.525,
+      "best_abstract_nominal_success": 0.85,
+      "best_abstract_cooperation_success": 0.925
+    },
+    {
+      "stage": "C",
+      "run_id": "20260723_091712_phase3_recurrent_nominal_mappo_seed3",
+      "environment_steps": 1507328,
+      "updates": 184,
+      "last_abstract_nominal_success": 0.975,
+      "last_abstract_cooperation_success": 1.0,
+      "best_abstract_nominal_success": 0.975,
+      "best_abstract_cooperation_success": 1.0
+    },
+    {
+      "stage": "D",
+      "run_id": "20260723_094519_phase3_recurrent_nominal_mappo_seed3",
+      "environment_steps": 2007040,
+      "updates": 245,
+      "last_abstract_nominal_success": 1.0,
+      "last_abstract_cooperation_success": 1.0,
+      "best_abstract_nominal_success": 1.0,
+      "best_abstract_cooperation_success": 1.0
+    }
+  ],
+  "intermediate_pymunk_evaluations": {
+    "stage_a_2v2_open": {
+      "episodes": 100,
+      "success_rate": 0.43,
+      "cooperative_success_rate": 0.43,
+      "mean_return": 5.756914286133073,
+      "pass_completion_rate": 0.9773210489014883,
+      "mean_meaningful_action_count": 5.81,
+      "median_success_time": 8.0
+    },
+    "stage_b_2v2_pass_required": {
+      "episodes": 100,
+      "success_rate": 0.37,
+      "cooperative_success_rate": 0.37,
+      "mean_return": 19.60078276910338,
+      "pass_completion_rate": 0.9934189406099518,
+      "mean_meaningful_action_count": 5.9,
+      "median_success_time": 11.200000000000001
+    }
+  },
+  "gate_b": {
+    "checkpoint_run_id": "20260723_094519_phase3_recurrent_nominal_mappo_seed3",
+    "checkpoint_label": "best_nominal",
+    "episodes_per_scenario": 100,
+    "seed_base": 350000,
+    "cases": {
+      "phase3_2v2_open": {
+        "success_rate": 0.49,
+        "cooperative_success_rate": 0.49,
+        "median_success_time": 14.0,
+        "mean_meaningful_action_count": 6.19
+      },
+      "phase3_3v2_open": {
+        "success_rate": 0.75,
+        "cooperative_success_rate": 0.73,
+        "median_success_time": 22.0,
+        "mean_meaningful_action_count": 6.94
+      },
+      "phase3_2v2_pass_required": {
+        "success_rate": 0.61,
+        "cooperative_success_rate": 0.61,
+        "median_success_time": 17.2,
+        "mean_meaningful_action_count": 6.55
+      }
+    },
+    "checks": {
+      "2v2_open_success": {
+        "observed": 0.49,
+        "criterion": 0.55,
+        "passed": false
+      },
+      "3v2_open_success": {
+        "observed": 0.75,
+        "criterion": 0.35,
+        "passed": true
+      },
+      "pass_required_cooperation": {
+        "observed": 0.61,
+        "criterion": 0.3,
+        "passed": true
+      },
+      "successful_sequence_duration": {
+        "observed": 17.2,
+        "criterion": 8.0,
+        "passed": true
+      },
+      "meaningful_actions": {
+        "observed": 6.19,
+        "criterion": 2.0,
+        "passed": true
+      }
+    },
+    "2v2_open_defender_style_success": {
+      "lane_block": 0.3333333333333333,
+      "predictive": 0.05263157894736842,
+      "press": 1.0,
+      "zonal": 0.4827586206896552
+    },
+    "diagnostics": {
+      "2v2_open_mean_pass_attempts": 35.67,
+      "2v2_open_lane_block_mean_pass_attempts": 93.14814814814815,
+      "2v2_open_lane_block_mean_team_return": 36.32329737489089,
+      "2v2_open_lane_block_success": 0.3333333333333333,
+      "2v2_open_predictive_mean_out_of_bounds": 7.315789473684211,
+      "2v2_open_predictive_success": 0.05263157894736842
+    }
+  },
+  "optimization_audit": {
+    "non_finite_events": 0,
+    "high_kl_stop_events": 0,
+    "stage_d_final_entropy": 0.5173128382726149,
+    "stage_d_final_approximate_kl": 0.0010567033043379131,
+    "stage_d_final_clip_fraction": 0.007629175135992806,
+    "stage_d_final_explained_variance": 0.8566288948059082,
+    "interpretation": "Optimization was numerically healthy. Gate B exposes a transfer and defender-style robustness failure, not a crashed or obviously divergent PPO run."
+  },
+  "evidence_boundary": {
+    "full_gate_b_rows": "Embedded in the executed Section-22 output of notebooks/phase3_adversarial_teamplay.ipynb. The first notebook version asserted before Drive sync, so the lightweight Mac archive lacks phase3_gate_b.json until Section 22 is rerun.",
+    "full_gate_a_rows": "The executed Section-12 notebook output records the full 100-episode-per-cell summary. The local runs/phase3_calibration directory is an older 20-episode smoke artifact and must not be substituted for the full gate.",
+    "raw_stage_logs": "runs/20260723_{070824,083425,091712,094519}_phase3_recurrent_nominal_mappo_seed3/logs/",
+    "throughput_artifact": "runs/phase3_throughput.json"
+  }
+}
