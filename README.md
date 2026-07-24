@@ -11,7 +11,9 @@ sim-to-sim transfer and a controlled proxy for parts of the sim-to-real gap; it 
 physical-robot deployment. The completed three-seed Phase 2 result is a failed overall gate:
 failure-directed randomization improves Pymunk profile/grid robustness, but loses too much nominal
 abstract competence and learns no stable passing. Phase 3 is implemented but has not been fully
-trained; smoke runs are not scientific results.
+graduated: seed-3 Stages A--D learned substantial cooperation, but historical Gate B failed
+Pymunk 2v2 open play at 0.49 versus the locked 0.55 floor. The focused Stage-R repair is
+implemented and smoke-tested but scientifically unrun. CC-FDR and final seeds remain locked.
 
 ## Contribution and architecture
 
@@ -35,6 +37,26 @@ letting one failure mode monopolize training.
 IPPO replaces the centralized critic with a parameter-shared local critic. The actor never sees
 the global state or hidden perturbation parameters. Both methods select exactly seven skills:
 approach, dribble left, dribble right, shoot, pass, support, and hold/face ball.
+
+The RoboCup-facing endgame is deliberately hierarchical:
+
+```text
+learned high-level football policy
+        ↓
+robot perception/localization
+        ↓
+walking / turning / dribbling / kicking primitives
+        ↓
+robot platform
+```
+
+This repository demonstrates high-level CTDE MARL under partial observability, recurrent
+decision-making, cooperative passing/positioning, procedural adversaries, sim-to-sim transfer,
+reward discipline, and gated experimentation. It does not train NAO/humanoid joint control, and
+success here alone is not a claim of winning RoboCup. This boundary is consistent with recent
+UW–Madison work on [multi-robot RL through abstract simulation](https://arxiv.org/abs/2503.05092)
+and [RL integrated within a classical robot-soccer stack](https://arxiv.org/abs/2412.09417);
+our simulator and deployment evidence are not the same as theirs.
 
 ## Repository structure
 
@@ -101,17 +123,37 @@ python -m scripts.train --config configs/phase3_recurrent_nominal.yaml \
 ```
 
 Stages B--D use `--resume` with the preceding best nominal checkpoint. CC-FDR starts from the best
-completed nominal policy and therefore requires `--warm-start`; it refuses random initialization:
+completed, graduated nominal policy. Historical Stage D did not graduate, so Stage R must run
+first. It warm-starts weights and normalizers from the exact Stage-D actor while resetting
+optimizers, schedule, rollout state, and Stage-R counters:
 
 ```bash
-python -m scripts.train --config configs/phase3_cc_fdr.yaml --seed 3 \
-  --warm-start runs/<nominal-run>/models/best_nominal_checkpoint.pt \
-  --calibration-summary runs/phase3_calibration_seed3/calibration_summary.json
+python -u -m scripts.evaluate_phase3 \
+  --run-dir runs/20260723_094519_phase3_recurrent_nominal_mappo_seed3 \
+  --checkpoint best_nominal --episodes 100 --seed-base 360000 \
+  --stage-r-r0-audit
+python -u -m scripts.evaluate_phase3_gates --gate reward-invariants \
+  --config configs/phase3_stage_r.yaml \
+  --output runs/logs/stage_r_reward_invariant_pretraining.json
+python -u -m scripts.train --config configs/phase3_stage_r.yaml --seed 3 \
+  --num-envs 128 --total-steps 500000 \
+  --warm-start runs/20260723_094519_phase3_recurrent_nominal_mappo_seed3/models/best_nominal_checkpoint.pt
 ```
 
 Gate B requires 2v2 open success at least 0.55, 3v2 open success at least 0.35,
 pass-required cooperative success at least 0.30, and median successful sequences of at least eight
-seconds. Gate C requires profile-mean improvement of at least 0.10, nominal loss no more than
+seconds. Gate B-R preserves those checks and adds style, cooperation, 3v2, reward-alignment, and
+reward-invariant safeguards on untouched seed base 370000. Only its explicit
+`passed=true`/`cc_fdr_authorized=true` artifact permits:
+
+```bash
+python -u -m scripts.train --config configs/phase3_cc_fdr.yaml --seed 3 \
+  --warm-start runs/<stage-r-run>/models/best_stage_r_checkpoint.pt \
+  --authorization-artifact runs/<stage-r-run>/eval/phase3_gate_b_r.json \
+  --calibration-summary runs/phase3_calibration_seed3/calibration_summary.json
+```
+
+Gate C requires profile-mean improvement of at least 0.10, nominal loss no more than
 0.10, grid regression no more than 0.05, and no cooperation regression. Development uses seed 3;
 new final seeds 4, 5, and 6 remain disabled until all gates pass.
 
@@ -200,10 +242,18 @@ python -m scripts.record_video --run-dir "$RUN_DIR" --checkpoint best \
   --simulator pymunk --episodes 3 --scenario cooperation --matched --seed 250000
 python -m scripts.record_video --config configs/base.yaml --baseline role_based \
   --simulator abstract --episodes 1
+
+python -u -m scripts.record_phase3_video --run-dir runs/<phase3-run> \
+  --checkpoint best_stage_r --simulator pymunk \
+  --scenario phase3_2v2_open --defender-style predictive \
+  --seed 370123 --seed-category gate --until-terminal
 ```
 
 Rendering uses Pillow RGB arrays and imageio-ffmpeg, so no display server is required. Videos are
 16:9 MP4s with simulator, seed, profile, actions, method, and final outcome overlays.
+The Phase-3 recorder also supports exact forced-style replay, fixed-length clips with
+`clip_end_metrics`, and terminal/full-match mode. Its manifest merges and deduplicates by
+checkpoint/backend/scenario/style/profile/seed/mode, preserving earlier valid records.
 
 ## Artifacts and aggregation
 
@@ -345,7 +395,8 @@ The three notebooks are command dashboards rather than hidden implementations:
 - `notebooks/phase2_training_transfer_report.ipynb`: MAPPO variants, ablations, full evaluation,
   comparison, reports, and Drive sync. It recomputes the Phase-1 audit before allowing training.
 - `notebooks/phase3_adversarial_teamplay.ipynb`: calibration, throughput, staged recurrent
-  training, CC-FDR, Gate B/C evaluation, videos, reports, and Drive sync. Expensive final seeds are
+  training, the self-contained Stage-R fast path in Sections 25–38, guarded CC-FDR, Gate B/B-R/C,
+  videos, reports, and Drive sync. Executed A–D outputs are preserved; expensive final seeds are
   disabled by default.
 
 They keep the repository under `/content`, use Drive only for persistent artifacts, refuse to pull
@@ -361,15 +412,18 @@ latexmk -pdf -interaction=nonstopmode -halt-on-error -outdir=reports reports/sur
 
 The main report is a paper-style account. The surrogate report is the technical ledger for exact
 settings, attempts, failures, and decisions. Both place their build products in `reports/` and
-clearly separate completed Phase-1/2 evidence from the unexecuted Phase-3 protocol.
+clearly separate completed Phase-1/2 and Phase-3 A–D evidence from implemented-but-unrun Stage R.
 
 ## Current status, limitations, and expected deliverables
 
 The repository implements the original environments and feed-forward comparisons plus the Phase 3
 fixed-roster tasks, recurrent MAPPO, competence-constrained failure direction, calibration and
 development gates, portable artifact audit, throughput instrumentation, upgraded video path, and
-an independently runnable notebook. This statement concerns software availability, not Phase 3
-performance. Full recurrent development and final seeds remain to be run.
+an independently runnable notebook. Stage R additionally implements reward schema 2, a
+possession-chain progress high-water mark, forced-style R0, Gate B-R, isolated seed streams,
+warm-start/reset semantics, and fail-closed CC-FDR authorization. This statement concerns software
+availability, not Stage-R performance: R0, the 500k run, Gate B-R, CC-FDR, and final seeds are
+unrun.
 
 The task remains deliberately reduced: vector observations, two or three attackers, scripted
 defenders, high-level skills, and synchronous environments. It excludes learned locomotion,
@@ -389,11 +443,16 @@ PDFs. Webots is a later fidelity tier only after the mandatory matrix is complet
 
 ## Prioritized execution roadmap
 
-1. Run Ruff, pytest, workspace audit, calibration smoke, and the full 100-episode Gate A.
-2. Run the 4/8/16 smoke benchmark, then measure 32/64/128/256/512 lanes on the L4 and select the
-   fastest stable production count rather than assuming one.
-3. Train seed-3 nominal stages A--D, evaluating and syncing after each stage.
-4. Run Gate B and inspect matched 2v2/3v2 videos; stop if team play is absent.
-5. Warm-start CC-FDR from the best nominal checkpoint and inspect competence-guard events.
-6. Run Gate C. Only after it passes, freeze the protocol and launch separate seeds 4, 5, and 6.
-7. Regenerate JSON-derived tables and compile both reports without inventing missing results.
+Phase 1, Phase 2, Gate A, Stages A–D, and historical Gate B are complete. Do not rerun A–D
+initially. Execute notebook Sections 25–38:
+
+1. R0: restore Stage-D `best_nominal` and run the frozen 4×2×2 audit.
+2. R1: run and save the reward-invariant checks.
+3. R2: train exactly one 500k Stage-R seed-3 run.
+4. R3: run the held-out, abstract-only validation matrix.
+5. R4: run Gate B-R on untouched seeds.
+6. R5: record matched full-match success/failure videos.
+7. R6: update and sync reports and the machine-readable summary.
+
+If Gate B-R fails, stop and follow its recorded branch. If it passes, Section 39/CC-FDR becomes
+authorized but does not run automatically. Gate C and seeds 4–6 remain later gated work.

@@ -151,6 +151,35 @@ def validate_config(config):
     disabled_parameters = config["randomization"].get("disabled_parameters", [])
     if not isinstance(disabled_parameters, list):
         raise ValueError("randomization.disabled_parameters must be a list")
+    phase3 = config.get("phase3", {})
+    if phase3.get("enabled") and phase3.get("active_stage") == "stage_r":
+        if int(phase3.get("reward_schema_version", 1)) < 2:
+            raise ValueError("Stage R requires phase3.reward_schema_version >= 2")
+        if float(config.get("phase3_reward", {}).get("controlled_reception", -1.0)) != 0.0:
+            raise ValueError("Stage R requires zero controlled-reception reward")
+        stage = phase3.get("stages", {}).get("stage_r")
+        stage_r = phase3.get("stage_r", {})
+        if not stage:
+            raise ValueError("Stage R configuration is missing phase3.stages.stage_r")
+        training_seed_base = int(stage_r.get("training_episode_seed_base", -1))
+        evaluation_seed_bases = config.get("evaluation", {}).get("seed_bases", {})
+        if training_seed_base < 0 or training_seed_base in {
+            int(value) for value in evaluation_seed_bases.values()
+        }:
+            raise ValueError(
+                "Stage R requires a declared training seed base distinct from "
+                "evaluation protocols"
+            )
+        for names_key, probabilities_key in [
+            ("scenarios", "probabilities"),
+            ("defender_styles", "defender_probabilities"),
+        ]:
+            names = stage.get(names_key, [])
+            probabilities = stage.get(probabilities_key, [])
+            if len(names) != len(probabilities) or abs(sum(probabilities) - 1.0) > 1e-8:
+                raise ValueError(
+                    "Stage R " + probabilities_key + " must align and sum to one"
+                )
     return config
 
 

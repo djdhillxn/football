@@ -1,6 +1,7 @@
 """Recurrent shared MAPPO and competence-constrained Phase 3 fine-tuning."""
 
 import copy
+import hashlib
 import logging
 import math
 import os
@@ -60,12 +61,44 @@ def plot_phase3_diagnostics(run_dir, curriculum=None):
             [
                 "validation_nominal_success",
                 "validation_cooperative_success",
+                "validation_lane_block_success",
+                "validation_predictive_success",
+                "validation_2v2_style_mean",
+                "validation_3v2_success",
                 "validation_profile_mean",
                 "validation_grid_auc",
             ],
             "Nominal--cooperation--robustness validation",
             "Success",
             "phase3_validation_tradeoff.png",
+        ),
+        (
+            [
+                "validation_lane_block_success",
+                "validation_predictive_success",
+                "validation_2v2_style_mean",
+            ],
+            "Stage R style-stratified learning",
+            "Success",
+            "stage_r_style_learning.png",
+        ),
+        (
+            [
+                "mean_reward_goal",
+                "mean_reward_ball_progress",
+                "mean_reward_controlled_pass",
+                "mean_reward_pass_and_advance",
+                "mean_reward_pass_and_goal",
+            ],
+            "Stage R reward decomposition",
+            "Mean episode reward",
+            "stage_r_reward_decomposition.png",
+        ),
+        (
+            ["validation_return_alignment_gap"],
+            "Stage R success--failure return alignment",
+            "Successful minus failed return",
+            "stage_r_return_alignment.png",
         ),
         (
             [
@@ -99,6 +132,25 @@ def plot_phase3_diagnostics(run_dir, curriculum=None):
             )
             axis.grid(alpha=0.25)
             axis.legend(fontsize=7)
+            figure.tight_layout()
+            figure.savefig(Path(run_dir) / "plots" / filename, dpi=180)
+        elif filename.startswith("stage_r_") and (
+            "stage" in data and (data["stage"] == "stage_r").any()
+        ):
+            axis.set(
+                title=title,
+                xlabel="Environment steps",
+                ylabel=ylabel,
+            )
+            axis.text(
+                0.5,
+                0.5,
+                "No applicable measurements in this run",
+                ha="center",
+                va="center",
+                transform=axis.transAxes,
+            )
+            axis.grid(alpha=0.25)
             figure.tight_layout()
             figure.savefig(Path(run_dir) / "plots" / filename, dpi=180)
         plt.close(figure)
@@ -426,23 +478,103 @@ class RecurrentMAPPOTrainer:
         self.environment_steps = 0
         self.stage_start_steps = 0
         self.best_scores = {"nominal": None, "cooperation": None, "composite": None}
+        self.best_stage_r_score = None
+        self.stage_r_training_seed_counter = 0
         self.last_validation = None
         self.last_rollout_timing = {}
         self.last_logging_io_seconds = 0.0
         self.low_update_signal_count = 0
         self.curriculum = None
         if self.mode == "cc_fdr":
+            self._verify_cc_fdr_authorization()
             profiles = [name for name in self.phase3["profiles"] if name != "nominal"]
             self.curriculum = CompetenceConstrainedCurriculum(
                 profiles, self.phase3["cc_fdr"]
             )
             if resume_path is None and warm_start_path is None:
                 raise ValueError("Phase 3 CC-FDR requires --warm-start or --resume")
+        if (
+            self.stage_name == "stage_r"
+            and resume_path is None
+            and warm_start_path is None
+        ):
+            raise ValueError(
+                "Stage R is a repair warm start; provide the historical Stage-D "
+                "best-nominal checkpoint with --warm-start"
+            )
         if resume_path is not None:
             self.load_checkpoint(resume_path, warm_start=False)
         elif warm_start_path is not None:
             self.load_checkpoint(warm_start_path, warm_start=True)
+            if self.stage_name == "stage_r":
+                self._write_stage_r_protocol(warm_start_path)
         self._reset_all()
+
+    def _verify_cc_fdr_authorization(self):
+        artifact = self.phase3.get("cc_fdr", {}).get("authorization_artifact")
+        if not artifact:
+            raise ValueError(
+                "Phase 3 CC-FDR requires a passing Gate B-R authorization artifact"
+            )
+        path = Path(artifact)
+        if not path.is_file():
+            raise FileNotFoundError("Gate B-R authorization artifact was not found: " + str(path))
+        import json
+
+        result = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            result.get("gate") != "B-R"
+            or not result.get("passed", False)
+            or not result.get("cc_fdr_authorized", False)
+        ):
+            raise ValueError(
+                "CC-FDR remains unauthorized: Gate B-R must pass and explicitly authorize it"
+            )
+
+    def _write_stage_r_protocol(self, warm_start_path):
+        source = Path(warm_start_path)
+        checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+        stage_r = self.phase3["stage_r"]
+        seed_bases = self.config["evaluation"]["seed_bases"]
+        write_json(
+            self.run_dir / "logs" / "stage_r_protocol.json",
+            {
+                "schema_version": 1,
+                "scientific_status": "unrun",
+                "training_seed": self.seed,
+                "warm_start_run": stage_r["warm_start_run_id"],
+                "warm_start_checkpoint": stage_r["warm_start_checkpoint"],
+                "warm_start_path": str(source),
+                "warm_start_sha256": checksum,
+                "reset_actor_optimizer": True,
+                "reset_critic_optimizer": True,
+                "reset_learning_rate_scheduler": True,
+                "reset_rollout_and_stage_counters": True,
+                "training_steps": int(stage_r["training_steps"]),
+                "training_episode_seed_base": int(
+                    stage_r["training_episode_seed_base"]
+                ),
+                "scenario_probabilities": dict(
+                    zip(self.stage["scenarios"], self.stage["probabilities"], strict=True)
+                ),
+                "defender_probabilities": dict(
+                    zip(
+                        self.stage["defender_styles"],
+                        self.stage["defender_probabilities"],
+                        strict=True,
+                    )
+                ),
+                "reward_coefficients": copy.deepcopy(self.config["phase3_reward"]),
+                "reward_schema_version": int(self.phase3["reward_schema_version"]),
+                "validation_seed_base": int(seed_bases["phase3_stage_r_validation"]),
+                "r0_audit_seed_base": int(seed_bases["phase3_stage_r_r0_audit"]),
+                "gate_b_r_seed_base": int(seed_bases["phase3_gate_b_r"]),
+                "checkpoint_selection": copy.deepcopy(
+                    stage_r["checkpoint_selection"]
+                ),
+                "gate_b_r": copy.deepcopy(stage_r["gate_b_r"]),
+            },
+        )
 
     def _sample_reset_options(self):
         if self.curriculum is None:
@@ -451,11 +583,20 @@ class RecurrentMAPPOTrainer:
                     self.stage["scenarios"], p=self.stage.get("probabilities")
                 )
             )
-            return {
+            options = {
                 "scenario": scenario,
                 "profile": "nominal",
                 "scenario_group": "nominal_curriculum",
             }
+            if self.stage.get("defender_styles"):
+                options["defender_style"] = str(
+                    self.rng.choice(
+                        self.stage["defender_styles"],
+                        p=self.stage.get("defender_probabilities"),
+                    )
+                )
+                options["scenario_group"] = "stage_r_nominal_mastery"
+            return options
         group, profile = self.curriculum.sample_group(self.rng)
         curriculum = self.phase3["cc_fdr"]
         if group == "nominal":
@@ -482,7 +623,18 @@ class RecurrentMAPPOTrainer:
 
     def _reset_lane(self, index, initial=False):
         options = self._sample_reset_options()
-        seed = self.seed + index if initial else int(self.rng.integers(0, 2**31 - 1))
+        if self.stage_name == "stage_r":
+            seed = (
+                int(self.phase3["stage_r"]["training_episode_seed_base"])
+                + self.stage_r_training_seed_counter
+            )
+            self.stage_r_training_seed_counter += 1
+        else:
+            seed = (
+                self.seed + index
+                if initial
+                else int(self.rng.integers(0, 2**31 - 1))
+            )
         observations, _ = self.environments[index].reset(seed=seed, options=options)
         self.observations[index] = observations
         self.states[index] = self.environments[index].state()
@@ -975,10 +1127,15 @@ class RecurrentMAPPOTrainer:
                 "success_rate": 0.0,
                 "cooperative_success_rate": 0.0,
                 "pass_completion_rate": 0.0,
+                "mean_reward_goal": 0.0,
+                "mean_reward_ball_progress": 0.0,
+                "mean_reward_controlled_pass": 0.0,
+                "mean_reward_pass_and_advance": 0.0,
+                "mean_reward_pass_and_goal": 0.0,
             }
         attempts = sum(item.get("valid_pass_attempts", 0) for item in self.completed_episodes)
         completions = sum(item.get("completed_receptions", 0) for item in self.completed_episodes)
-        return {
+        result = {
             "mean_return": float(
                 np.mean([item.get("team_return", 0.0) for item in self.completed_episodes])
             ),
@@ -992,10 +1149,33 @@ class RecurrentMAPPOTrainer:
             ),
             "pass_completion_rate": completions / max(1, attempts),
         }
+        for name in [
+            "reward_goal",
+            "reward_ball_progress",
+            "reward_controlled_pass",
+            "reward_pass_and_advance",
+            "reward_pass_and_goal",
+        ]:
+            result["mean_" + name] = float(
+                np.mean([item.get(name, 0.0) for item in self.completed_episodes])
+            )
+        return result
 
-    def evaluate(self, scenario, episodes, seed_base, simulator="abstract", profile="nominal"):
+    def evaluate(
+        self,
+        scenario,
+        episodes,
+        seed_base,
+        simulator="abstract",
+        profile="nominal",
+        defender_style="mixed",
+    ):
         env = make_phase3_environment(
-            self.config, simulator=simulator, scenario=scenario, profile_name=profile
+            self.config,
+            simulator=simulator,
+            scenario=scenario,
+            profile_name=profile,
+            defender_style=defender_style,
         )
         successes = []
         cooperative = []
@@ -1053,11 +1233,98 @@ class RecurrentMAPPOTrainer:
             "success_rate": float(np.mean(successes)),
             "cooperative_success_rate": float(np.mean(cooperative)),
             "mean_return": float(np.mean(returns)),
+            "mean_successful_return": (
+                float(np.mean([value for value, success in zip(returns, successes, strict=True) if success]))
+                if any(successes)
+                else None
+            ),
+            "mean_failed_return": (
+                float(np.mean([value for value, success in zip(returns, successes, strict=True) if not success]))
+                if not all(successes)
+                else None
+            ),
+            "success_failure_return_gap": (
+                float(
+                    np.mean(
+                        [
+                            value
+                            for value, success in zip(returns, successes, strict=True)
+                            if success
+                        ]
+                    )
+                    - np.mean(
+                        [
+                            value
+                            for value, success in zip(returns, successes, strict=True)
+                            if not success
+                        ]
+                    )
+                )
+                if any(successes) and not all(successes)
+                else None
+            ),
         }
 
     def _validation(self):
         episodes = int(self.config["train"]["validation_episodes"])
         seed_base = int(self.config["evaluation"]["seed_bases"].get("phase3_validation", 320000))
+        if self.stage_name == "stage_r":
+            seed_base = int(
+                self.config["evaluation"]["seed_bases"]["phase3_stage_r_validation"]
+            )
+            styles = {}
+            for index, style in enumerate(
+                ["lane_block", "predictive", "zonal", "press"]
+            ):
+                styles[style] = self.evaluate(
+                    "phase3_2v2_open",
+                    episodes,
+                    seed_base + index * max(episodes, 100),
+                    simulator="abstract",
+                    defender_style=style,
+                )
+            cooperation = self.evaluate(
+                "phase3_2v2_pass_required",
+                episodes,
+                seed_base + 4 * max(episodes, 100),
+                simulator="abstract",
+                defender_style="mixed",
+            )
+            three_v_two = self.evaluate(
+                "phase3_3v2_open",
+                episodes,
+                seed_base + 5 * max(episodes, 100),
+                simulator="abstract",
+                defender_style="mixed",
+            )
+            nominal = {
+                "success_rate": float(
+                    np.mean([result["success_rate"] for result in styles.values()])
+                ),
+                "cooperative_success_rate": float(
+                    np.mean(
+                        [
+                            result["cooperative_success_rate"]
+                            for result in styles.values()
+                        ]
+                    )
+                ),
+                "mean_return": float(
+                    np.mean([result["mean_return"] for result in styles.values()])
+                ),
+            }
+            result = {
+                "nominal": nominal,
+                "cooperation": cooperation,
+                "three_v_two": three_v_two,
+                "styles": styles,
+                "robustness": None,
+                "simulator": "abstract",
+                "seed_base": seed_base,
+                "checkpoint_selection_uses_pymunk": False,
+            }
+            self.last_validation = result
+            return result
         nominal = self.evaluate(
             "phase3_2v2_open", episodes, seed_base, simulator="abstract"
         )
@@ -1129,6 +1396,42 @@ class RecurrentMAPPOTrainer:
         return score, feasible
 
     def _save_best(self, validation):
+        if self.stage_name == "stage_r":
+            floors = self.phase3["stage_r"]["checkpoint_selection"]
+            eligible = (
+                validation["cooperation"]["cooperative_success_rate"]
+                >= float(floors["pass_required_cooperation_floor"])
+                and validation["three_v_two"]["success_rate"]
+                >= float(floors["3v2_open_success_floor"])
+            )
+            styles = validation["styles"]
+            score = (
+                min(
+                    styles["lane_block"]["success_rate"],
+                    styles["predictive"]["success_rate"],
+                ),
+                float(
+                    np.mean(
+                        [result["success_rate"] for result in styles.values()]
+                    )
+                ),
+                validation["nominal"]["success_rate"],
+                validation["cooperation"]["cooperative_success_rate"],
+            )
+            if eligible and (
+                self.best_stage_r_score is None
+                or tuple(score) > tuple(self.best_stage_r_score)
+            ):
+                self.best_stage_r_score = list(score)
+                self.best_scores["nominal"] = float(score[2])
+                self.best_scores["cooperation"] = float(score[3])
+                self.save_checkpoint(
+                    self.run_dir / "models" / "best_stage_r_checkpoint.pt"
+                )
+                self.save_checkpoint(
+                    self.run_dir / "models" / "best_nominal_checkpoint.pt"
+                )
+            return
         nominal = validation["nominal"]["success_rate"]
         cooperation = validation["cooperation"]["cooperative_success_rate"]
         composite, feasible = self._composite(validation)
@@ -1158,7 +1461,10 @@ class RecurrentMAPPOTrainer:
     def _decay_learning_rates(self, total_updates):
         if not self.config["ppo"].get("linear_learning_rate_decay", True):
             return
-        fraction = max(0.0, 1.0 - self.current_update / max(1, total_updates))
+        decay_update = self.current_update
+        if self.stage_name == "stage_r":
+            decay_update = max(0, self.current_update - 1)
+        fraction = max(0.0, 1.0 - decay_update / max(1, total_updates))
         actor_min = float(self.config["ppo"].get("actor_min_learning_rate", 0.0))
         critic_min = float(self.config["ppo"].get("critic_min_learning_rate", 0.0))
         actor_rate = max(
@@ -1201,6 +1507,8 @@ class RecurrentMAPPOTrainer:
             "mode": self.mode,
             "recurrent_hidden_size": self.hidden_size,
             "best_scores": self.best_scores,
+            "best_stage_r_score": self.best_stage_r_score,
+            "stage_r_training_seed_counter": self.stage_r_training_seed_counter,
             "last_validation": self.last_validation,
             "curriculum": self.curriculum.state_dict() if self.curriculum is not None else None,
             "numpy_random_state": np.random.get_state(),
@@ -1250,8 +1558,26 @@ class RecurrentMAPPOTrainer:
         self.observation_rms.load_state_dict(checkpoint["observation_normalization"])
         self.state_rms.load_state_dict(checkpoint["global_state_normalization"])
         if warm_start:
+            checkpoint_stage = checkpoint.get("active_stage")
+            if self.stage_name == "stage_r" and checkpoint_stage != "stage_d":
+                raise ValueError(
+                    "Stage R must warm-start from a historical Stage-D checkpoint"
+                )
+            if (
+                self.stage_name == "stage_r"
+                and source.parent.parent.name
+                != self.phase3["stage_r"]["warm_start_run_id"]
+            ):
+                raise ValueError(
+                    "Stage R warm-start run differs from the predeclared "
+                    "historical Stage-D run"
+                )
+            if self.mode == "cc_fdr" and checkpoint_stage != "stage_r":
+                raise ValueError(
+                    "CC-FDR must warm-start from the selected Stage-R checkpoint"
+                )
             if self.mode == "cc_fdr":
-                reference = checkpoint.get("last_validation", {})
+                reference = checkpoint.get("last_validation") or {}
                 self.curriculum.nominal_reference = (
                     reference.get("nominal", {}).get("success_rate")
                 )
@@ -1262,12 +1588,23 @@ class RecurrentMAPPOTrainer:
             self.stage_start_steps = 0
             logger.info("Warm-started Phase 3 weights from %s", source)
             return
+        if self.stage_name == "stage_r" and checkpoint.get("active_stage") != "stage_r":
+            raise ValueError(
+                "Stage R resume accepts only a Stage-R checkpoint; use --warm-start "
+                "for the historical Stage-D checkpoint"
+            )
         self.actor_optimizer.load_state_dict(checkpoint["actor_optimizer"])
         self.critic_optimizer.load_state_dict(checkpoint["critic_optimizer"])
         self.current_update = int(checkpoint["current_update"])
         self.environment_steps = int(checkpoint["environment_steps"])
         self.stage_start_steps = int(checkpoint.get("stage_start_steps", 0))
         self.best_scores = copy.deepcopy(checkpoint.get("best_scores", self.best_scores))
+        self.best_stage_r_score = copy.deepcopy(
+            checkpoint.get("best_stage_r_score")
+        )
+        self.stage_r_training_seed_counter = int(
+            checkpoint.get("stage_r_training_seed_counter", 0)
+        )
         self.last_validation = copy.deepcopy(checkpoint.get("last_validation"))
         if self.curriculum is not None and checkpoint.get("curriculum") is not None:
             self.curriculum.load_state_dict(checkpoint["curriculum"])
@@ -1310,6 +1647,8 @@ class RecurrentMAPPOTrainer:
     def train(self):
         if self.mode == "cc_fdr":
             target_steps = self.environment_steps + int(self.config["train"]["total_steps"])
+        elif self.stage_name == "stage_r":
+            target_steps = int(self.config["train"]["total_steps"])
         else:
             target_steps = int(self.stage["target_steps"])
         steps_per_update = self.num_envs * self.rollout_steps
@@ -1385,6 +1724,17 @@ class RecurrentMAPPOTrainer:
                     "success_rate": episode["success_rate"],
                     "cooperative_success_rate": episode["cooperative_success_rate"],
                     "pass_completion_rate": episode["pass_completion_rate"],
+                    "mean_reward_goal": episode["mean_reward_goal"],
+                    "mean_reward_ball_progress": episode["mean_reward_ball_progress"],
+                    "mean_reward_controlled_pass": episode[
+                        "mean_reward_controlled_pass"
+                    ],
+                    "mean_reward_pass_and_advance": episode[
+                        "mean_reward_pass_and_advance"
+                    ],
+                    "mean_reward_pass_and_goal": episode[
+                        "mean_reward_pass_and_goal"
+                    ],
                     "rollout_seconds": rollout_seconds,
                     "update_seconds": update_seconds,
                     **self.last_rollout_timing,
@@ -1425,6 +1775,35 @@ class RecurrentMAPPOTrainer:
                     if validation is None
                     or validation["robustness"] is None
                     else validation["robustness"]["grid_auc"],
+                    "validation_lane_block_success": ""
+                    if validation is None or "styles" not in validation
+                    else validation["styles"]["lane_block"]["success_rate"],
+                    "validation_predictive_success": ""
+                    if validation is None or "styles" not in validation
+                    else validation["styles"]["predictive"]["success_rate"],
+                    "validation_2v2_style_mean": ""
+                    if validation is None or "styles" not in validation
+                    else float(
+                        np.mean(
+                            [
+                                result["success_rate"]
+                                for result in validation["styles"].values()
+                            ]
+                        )
+                    ),
+                    "validation_3v2_success": ""
+                    if validation is None or "three_v_two" not in validation
+                    else validation["three_v_two"]["success_rate"],
+                    "validation_return_alignment_gap": ""
+                    if validation is None or "styles" not in validation
+                    else min(
+                        [
+                            result["success_failure_return_gap"]
+                            for result in validation["styles"].values()
+                            if result["success_failure_return_gap"] is not None
+                        ],
+                        default=float("nan"),
+                    ),
                     "nominal_rehearsal_probability": ""
                     if self.curriculum is None
                     else self.curriculum.nominal_probability,
@@ -1440,6 +1819,16 @@ class RecurrentMAPPOTrainer:
                     if validation is None
                     else f"{validation['nominal']['success_rate']:.2f}"
                 )
+                lane_display = (
+                    "-"
+                    if validation is None or "styles" not in validation
+                    else f"{validation['styles']['lane_block']['success_rate']:.2f}"
+                )
+                predictive_display = (
+                    "-"
+                    if validation is None or "styles" not in validation
+                    else f"{validation['styles']['predictive']['success_rate']:.2f}"
+                )
                 gpu_display = f"{cuda_allocated / (1024**2):.0f}M"
                 progress.set_postfix(
                     step=f"{self.environment_steps}/{target_steps}",
@@ -1447,8 +1836,11 @@ class RecurrentMAPPOTrainer:
                     success=f"{episode['success_rate']:.2f}",
                     ret=f"{episode['mean_return']:.2f}",
                     val=validation_display,
+                    lane=lane_display,
+                    pred=predictive_display,
                     coop=f"{episode['cooperative_success_rate']:.2f}",
                     kl=f"{update_metrics['approximate_kl']:.3f}",
+                    clip=f"{update_metrics['clip_fraction']:.2f}",
                     ent=f"{update_metrics['entropy']:.2f}",
                     lr=f"{actor_learning_rate:.1e}",
                     gpu=gpu_display,
@@ -1461,7 +1853,10 @@ class RecurrentMAPPOTrainer:
         final_checkpoint = self.save_checkpoint(
             self.run_dir / "models" / "final_checkpoint.pt"
         )
-        if not (self.run_dir / "models" / "best_nominal_checkpoint.pt").is_file():
+        if (
+            self.stage_name != "stage_r"
+            and not (self.run_dir / "models" / "best_nominal_checkpoint.pt").is_file()
+        ):
             self.save_checkpoint(self.run_dir / "models" / "best_nominal_checkpoint.pt")
         actor_path = self.export_actor(self.run_dir / "models" / "final_actor.ts")
         frame = self.environments[0].render()
@@ -1477,15 +1872,37 @@ class RecurrentMAPPOTrainer:
                 "stage": self.stage_name,
                 "mode": self.mode,
                 "best_scores": self.best_scores,
+                "best_stage_r_score": self.best_stage_r_score,
                 "last_validation": self.last_validation,
                 "full_scientific_run": self.environment_steps >= 500000,
+                "stage_r_candidate_selected": (
+                    self.run_dir / "models" / "best_stage_r_checkpoint.pt"
+                ).is_file(),
             },
         )
+        if self.stage_name == "stage_r":
+            import json
+
+            protocol_path = self.run_dir / "logs" / "stage_r_protocol.json"
+            protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+            protocol["scientific_status"] = (
+                "training_complete"
+                if self.environment_steps >= int(self.phase3["stage_r"]["training_steps"])
+                else "smoke_complete_non_scientific"
+            )
+            protocol["environment_steps"] = self.environment_steps
+            protocol["updates"] = self.current_update
+            protocol["best_stage_r_score"] = self.best_stage_r_score
+            protocol["stage_r_candidate_selected"] = (
+                self.run_dir / "models" / "best_stage_r_checkpoint.pt"
+            ).is_file()
+            write_json(protocol_path, protocol)
+        selected_checkpoint = self.run_dir / "models" / "best_nominal_checkpoint.pt"
+        if not selected_checkpoint.is_file():
+            selected_checkpoint = final_checkpoint
         return {
             "final_checkpoint": str(final_checkpoint),
-            "best_checkpoint": str(
-                self.run_dir / "models" / "best_nominal_checkpoint.pt"
-            ),
+            "best_checkpoint": str(selected_checkpoint),
             "final_actor": str(actor_path),
             "metrics_csv": str(self.run_dir / "logs" / "metrics.csv"),
             "render_check": str(self.run_dir / "videos" / "render_check.png"),

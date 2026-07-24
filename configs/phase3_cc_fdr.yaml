@@ -6,6 +6,12 @@ experiment:
 phase3:
   mode: cc_fdr
   active_stage: stage_d
+  reward_schema_version: 2
+  cc_fdr:
+    authorization_artifact: null
+
+phase3_reward:
+  controlled_reception: 0.0
 
 randomization:
   mode: failure_directed

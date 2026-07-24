@@ -1,0 +1,62 @@
+inherits: phase3_base.yaml
+
+experiment:
+  name: phase3_stage_r_nominal_mastery
+  seed: 3
+
+phase3:
+  mode: nominal
+  active_stage: stage_r
+  require_calibration: false
+  reward_schema_version: 2
+  mixed_defender_styles: [lane_block, predictive, zonal, press]
+  mixed_defender_probabilities: [0.35, 0.35, 0.20, 0.10]
+  stages:
+    stage_r:
+      target_steps: 500000
+      match_mode: true
+      scenarios:
+        - phase3_2v2_open
+        - phase3_2v2_pass_required
+        - phase3_3v2_open
+        - phase3_3v2_press
+      probabilities: [0.50, 0.20, 0.15, 0.15]
+      defender_styles: [lane_block, predictive, zonal, press]
+      defender_probabilities: [0.35, 0.35, 0.20, 0.10]
+  stage_r:
+    development_summary: reports/phase3_development_summary.json
+    warm_start_run_id: 20260723_094519_phase3_recurrent_nominal_mappo_seed3
+    warm_start_checkpoint: best_nominal
+    training_episode_seed_base: 1000000000
+    training_steps: 500000
+    checkpoint_selection:
+      pass_required_cooperation_floor: 0.50
+      3v2_open_success_floor: 0.65
+    gate_b_r:
+      minimum_pass_required_cooperation: 0.55
+      minimum_3v2_open_success: 0.70
+      minimum_worst_style_success: 0.25
+      minimum_lane_predictive_mean: 0.40
+      minimum_success_failure_return_gap: 5.0
+
+phase3_reward:
+  controlled_reception: 0.0
+  pass_advance: 0.30
+
+ppo:
+  actor_learning_rate: 0.00010
+  critic_learning_rate: 0.00010
+  actor_min_learning_rate: 0.00003
+  critic_min_learning_rate: 0.00003
+
+train:
+  total_steps: 500000
+  num_envs: 128
+  validation_frequency_steps: 50000
+  validation_episodes: 40
+
+evaluation:
+  seed_bases:
+    phase3_stage_r_r0_audit: 360000
+    phase3_stage_r_validation: 365000
+    phase3_gate_b_r: 370000

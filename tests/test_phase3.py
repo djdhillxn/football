@@ -1,10 +1,13 @@
 """Correctness tests for the gated recurrent Phase 3 extension."""
 
 import copy
+import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from robosoccer.artifacts import resolve_run_pointer
 from robosoccer.config import load_config
@@ -12,6 +15,7 @@ from robosoccer.phase3 import (
     PHASE3_AGENTS,
     Phase3EnvironmentBatch,
     make_phase3_environment,
+    run_stage_r_reward_invariants,
 )
 from robosoccer.recurrent import (
     CompetenceConstrainedCurriculum,
@@ -21,12 +25,87 @@ from robosoccer.recurrent import (
     _cpu_rng_state,
 )
 from robosoccer.training import compute_gae
-from scripts.evaluate_phase3_gates import compact_result_for_console
+from robosoccer.utils import RunningMeanStd
+from scripts.evaluate_phase3 import evaluate
+from scripts.evaluate_phase3_gates import compact_result_for_console, gate_b_r
+from scripts.record_phase3_video import (
+    manifest_record_key,
+    merge_manifest_records,
+    record_phase3_videos,
+)
 
 
 @pytest.fixture(scope="module")
 def phase3_config():
     return load_config("configs/phase3_smoke.yaml")
+
+
+def stage_r_test_config(base, warm_start_run_id="synthetic_stage_d"):
+    config = copy.deepcopy(base)
+    config["experiment"]["name"] = "phase3_stage_r_test"
+    config["phase3"]["active_stage"] = "stage_r"
+    config["phase3"]["mode"] = "nominal"
+    config["phase3"]["require_calibration"] = False
+    config["phase3"]["reward_schema_version"] = 2
+    config["phase3"]["stages"]["stage_r"] = {
+        "target_steps": 128,
+        "match_mode": True,
+        "scenarios": [
+            "phase3_2v2_open",
+            "phase3_2v2_pass_required",
+            "phase3_3v2_open",
+            "phase3_3v2_press",
+        ],
+        "probabilities": [0.50, 0.20, 0.15, 0.15],
+        "defender_styles": ["lane_block", "predictive", "zonal", "press"],
+        "defender_probabilities": [0.35, 0.35, 0.20, 0.10],
+    }
+    config["phase3"]["stage_r"] = {
+        "warm_start_run_id": warm_start_run_id,
+        "warm_start_checkpoint": "best_nominal",
+        "training_episode_seed_base": 1000000000,
+        "training_steps": 128,
+        "checkpoint_selection": {
+            "pass_required_cooperation_floor": 0.50,
+            "3v2_open_success_floor": 0.65,
+        },
+        "gate_b_r": {
+            "minimum_pass_required_cooperation": 0.55,
+            "minimum_3v2_open_success": 0.70,
+            "minimum_worst_style_success": 0.25,
+            "minimum_lane_predictive_mean": 0.40,
+            "minimum_success_failure_return_gap": 5.0,
+        },
+    }
+    config["phase3_reward"]["controlled_reception"] = 0.0
+    config["ppo"]["actor_learning_rate"] = 1e-4
+    config["ppo"]["critic_learning_rate"] = 1e-4
+    config["ppo"]["actor_min_learning_rate"] = 3e-5
+    config["ppo"]["critic_min_learning_rate"] = 3e-5
+    config["train"]["total_steps"] = 128
+    config["evaluation"]["seed_bases"].update(
+        {
+            "phase3_stage_r_r0_audit": 360000,
+            "phase3_stage_r_validation": 365000,
+            "phase3_gate_b_r": 370000,
+        }
+    )
+    return config
+
+
+def stage_d_checkpoint(base, root):
+    config = copy.deepcopy(base)
+    config["phase3"]["active_stage"] = "stage_d"
+    config["phase3"]["mode"] = "nominal"
+    config["phase3"]["require_calibration"] = False
+    _trainer_directories(root)
+    trainer = RecurrentMAPPOTrainer(config, root)
+    try:
+        trainer.observation_rms.mean.fill(1.25)
+        trainer.state_rms.mean.fill(-0.75)
+        return trainer.save_checkpoint(root / "models" / "best_nominal_checkpoint.pt")
+    finally:
+        trainer.close()
 
 
 def test_phase3_gate_console_summary_preserves_saved_episode_rows():
@@ -260,6 +339,226 @@ def test_selecting_pass_has_no_direct_reward_component(phase3_config):
         assert "pass" in env._event_rewards
         assert "controlled_reception" not in env._event_rewards
         assert phase3_config["phase3_reward"].get("pass", 0.0) == 0.0
+    finally:
+        env.close()
+
+
+def test_stage_r_reward_frontier_and_circulation_invariants(phase3_config):
+    result = run_stage_r_reward_invariants(stage_r_test_config(phase3_config))
+    assert result["passed"] is True
+    checks = result["checks"]
+    assert checks["controlled_reception_reward_zero"]["observed"] == 0.0
+    assert checks["first_forward_frontier_positive"]["observed"] > 0.0
+    assert checks["backward_reception_no_progress"]["observed"] == 0.0
+    assert checks["aba_no_repeated_progress"]["passed"] is True
+    assert checks["revisited_frontier_no_progress"]["observed"] == 0.0
+    assert checks["new_frontier_incremental_only"]["passed"] is True
+    assert checks["turnover_resets_chain"]["passed"] is True
+    assert checks["restart_resets_chain"]["passed"] is True
+    assert checks["pass_to_goal_fires_once"]["observed"] == 1
+    assert checks["pass_without_goal_has_no_pass_to_goal"]["observed"] == 0
+    assert checks["circulation_reward_does_not_scale"]["passed"] is True
+
+
+def test_stage_r_config_preserves_historical_reward_schema():
+    historical = load_config("configs/phase3_recurrent_nominal.yaml")
+    stage_r = load_config("configs/phase3_stage_r.yaml")
+    assert historical["phase3"].get("reward_schema_version", 1) == 1
+    assert historical["phase3_reward"]["controlled_reception"] == pytest.approx(0.35)
+    assert stage_r["phase3"]["reward_schema_version"] == 2
+    assert stage_r["phase3_reward"]["controlled_reception"] == 0.0
+    assert stage_r["phase3"]["stages"]["stage_r"]["probabilities"] == [
+        0.50,
+        0.20,
+        0.15,
+        0.15,
+    ]
+    assert stage_r["phase3"]["stages"]["stage_r"]["defender_probabilities"] == [
+        0.35,
+        0.35,
+        0.20,
+        0.10,
+    ]
+
+
+@pytest.mark.parametrize("simulator", ["abstract", "pymunk"])
+@pytest.mark.parametrize(
+    "style", ["lane_block", "predictive", "zonal", "press"]
+)
+def test_forced_defender_style_is_exact(phase3_config, simulator, style):
+    env = make_phase3_environment(
+        phase3_config,
+        simulator=simulator,
+        scenario="phase3_2v2_open",
+        defender_style=style,
+    )
+    try:
+        _, infos = env.reset(seed=220)
+        assert env.defender_style == style
+        assert all(info["defender_style"] == style for info in infos.values())
+    finally:
+        env.close()
+
+
+def test_evaluation_row_records_forced_style(phase3_config):
+    env = make_phase3_environment(phase3_config)
+    actor = RecurrentSharedActor(
+        env.observation_dimension,
+        env.action_size,
+        phase3_config["model"],
+        phase3_config["phase3"]["recurrent"],
+    )
+    normalizer = RunningMeanStd((env.observation_dimension,))
+    env.close()
+    rows = evaluate(
+        phase3_config,
+        actor,
+        normalizer,
+        torch.device("cpu"),
+        "abstract",
+        "phase3_2v2_open",
+        1,
+        361900,
+        "nominal",
+        defender_style="predictive",
+        seed_category="audit",
+        policy_run_id="synthetic",
+        checkpoint="synthetic.pt",
+    )
+    assert rows[0]["defender_style"] == "predictive"
+    assert rows[0]["requested_defender_style"] == "predictive"
+    assert rows[0]["seed_category"] == "audit"
+
+
+def test_gate_b_r_cannot_silently_use_mixed_style(
+    phase3_config, tmp_path, monkeypatch
+):
+    config = stage_r_test_config(phase3_config)
+    checkpoint = tmp_path / "candidate.pt"
+    checkpoint.write_bytes(b"synthetic")
+
+    def fake_load_policy(run_dir, checkpoint_name, device):
+        return config, object(), object(), checkpoint
+
+    def fake_evaluate(
+        config_value,
+        actor,
+        normalizer,
+        device,
+        simulator,
+        scenario,
+        episodes,
+        seed_base,
+        profile,
+        defender_style="mixed",
+        **kwargs,
+    ):
+        if defender_style != "mixed":
+            return [{"defender_style": "mixed"}]
+        return [
+            {
+                "defender_style": "lane_block",
+                "success": 1,
+                "cooperative_success": 1,
+                "team_return": 10.0,
+                "completed_receptions": 1,
+                "valid_pass_attempts": 1,
+                "meaningful_action_count": 3,
+                "time_to_score": 10.0,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "scripts.evaluate_phase3_gates.load_policy", fake_load_policy
+    )
+    monkeypatch.setattr("scripts.evaluate_phase3_gates.evaluate", fake_evaluate)
+    with pytest.raises(RuntimeError, match="fixed-style"):
+        gate_b_r(
+            tmp_path,
+            "best_stage_r",
+            1,
+            370000,
+            torch.device("cpu"),
+            tmp_path / "unused.json",
+        )
+
+
+def test_gate_b_r_uses_declared_nonoverlapping_seed_blocks(
+    phase3_config, tmp_path, monkeypatch
+):
+    config = stage_r_test_config(phase3_config)
+    checkpoint = tmp_path / "candidate.pt"
+    checkpoint.write_bytes(b"synthetic")
+    observed = []
+
+    def fake_load_policy(run_dir, checkpoint_name, device):
+        return config, object(), object(), checkpoint
+
+    def fake_evaluate(
+        config_value,
+        actor,
+        normalizer,
+        device,
+        simulator,
+        scenario,
+        episodes,
+        seed_base,
+        profile,
+        defender_style="mixed",
+        **kwargs,
+    ):
+        observed.append((seed_base, simulator, scenario, defender_style))
+        return [
+            {
+                "defender_style": (
+                    "lane_block" if defender_style == "mixed" else defender_style
+                ),
+                "success": 1,
+                "cooperative_success": 1,
+                "team_return": 10.0,
+                "completed_receptions": 1,
+                "valid_pass_attempts": 1,
+                "meaningful_action_count": 3,
+                "time_to_score": 10.0,
+            }
+        ]
+
+    invariants = tmp_path / "reward_invariants.json"
+    invariants.write_text(
+        json.dumps({"reward_schema_version": 2, "passed": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "scripts.evaluate_phase3_gates.load_policy", fake_load_policy
+    )
+    monkeypatch.setattr("scripts.evaluate_phase3_gates.evaluate", fake_evaluate)
+    result = gate_b_r(
+        tmp_path,
+        "best_stage_r",
+        1,
+        370000,
+        torch.device("cpu"),
+        invariants,
+    )
+    assert [entry[0] for entry in observed] == [
+        370000 + 100 * index for index in range(14)
+    ]
+    assert len({entry[0] for entry in observed}) == 14
+    assert result["seed_block_size"] == 100
+
+
+def test_collision_metric_documents_overlap_step_semantics(phase3_config):
+    env = make_phase3_environment(phase3_config, scenario="phase3_2v2_open")
+    try:
+        env.reset(seed=221)
+        snapshot = env.metrics_snapshot()
+        assert (
+            snapshot["collision_counting_semantics"]
+            == "macro_action_decisions_with_attacker_overlap"
+        )
+        assert phase3_config["phase3_reward"]["collision_penalty"] == pytest.approx(
+            -0.02
+        )
     finally:
         env.close()
 
@@ -521,6 +820,101 @@ def test_recurrent_checkpoint_round_trip_and_export(phase3_config, tmp_path):
         second.close()
 
 
+def test_stage_r_warm_start_restores_weights_and_normalizers_but_resets_optimizers(
+    phase3_config, tmp_path
+):
+    source_root = tmp_path / "synthetic_stage_d"
+    target_root = tmp_path / "stage_r"
+    checkpoint = stage_d_checkpoint(phase3_config, source_root)
+    _trainer_directories(target_root)
+    config = stage_r_test_config(phase3_config)
+    trainer = RecurrentMAPPOTrainer(
+        config,
+        target_root,
+        warm_start_path=checkpoint,
+    )
+    try:
+        saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        for name, value in trainer.actor.state_dict().items():
+            torch.testing.assert_close(value.cpu(), saved["actor_weights"][name])
+        for name, value in trainer.critic.state_dict().items():
+            torch.testing.assert_close(value.cpu(), saved["critic_weights"][name])
+        np.testing.assert_allclose(trainer.observation_rms.mean, 1.25)
+        np.testing.assert_allclose(trainer.state_rms.mean, -0.75)
+        assert not trainer.actor_optimizer.state
+        assert not trainer.critic_optimizer.state
+        assert trainer.actor_optimizer.param_groups[0]["lr"] == pytest.approx(1e-4)
+        assert trainer.critic_optimizer.param_groups[0]["lr"] == pytest.approx(1e-4)
+        assert trainer.current_update == 0
+        assert trainer.environment_steps == 0
+        protocol = json.loads(
+            (target_root / "logs" / "stage_r_protocol.json").read_text()
+        )
+        assert protocol["reset_actor_optimizer"] is True
+        assert protocol["warm_start_sha256"]
+    finally:
+        trainer.close()
+
+
+def test_stage_r_resume_refuses_historical_stage_d_checkpoint(
+    phase3_config, tmp_path
+):
+    source_root = tmp_path / "synthetic_stage_d_resume"
+    target_root = tmp_path / "stage_r_resume"
+    checkpoint = stage_d_checkpoint(phase3_config, source_root)
+    _trainer_directories(target_root)
+    with pytest.raises(ValueError, match="Stage R resume accepts only"):
+        RecurrentMAPPOTrainer(
+            stage_r_test_config(phase3_config),
+            target_root,
+            resume_path=checkpoint,
+        )
+
+
+def test_stage_r_checkpoint_selection_uses_only_abstract_validation(
+    phase3_config, tmp_path, monkeypatch
+):
+    source_root = tmp_path / "synthetic_stage_d_validation"
+    target_root = tmp_path / "stage_r_validation"
+    checkpoint = stage_d_checkpoint(phase3_config, source_root)
+    _trainer_directories(target_root)
+    trainer = RecurrentMAPPOTrainer(
+        stage_r_test_config(phase3_config, source_root.name),
+        target_root,
+        warm_start_path=checkpoint,
+    )
+    simulators = []
+
+    def fake_evaluate(
+        scenario,
+        episodes,
+        seed_base,
+        simulator="abstract",
+        profile="nominal",
+        defender_style="mixed",
+    ):
+        simulators.append(simulator)
+        return {
+            "success_rate": 0.8,
+            "cooperative_success_rate": 0.8,
+            "mean_return": 10.0,
+            "mean_successful_return": 12.0,
+            "mean_failed_return": 4.0,
+            "success_failure_return_gap": 8.0,
+        }
+
+    monkeypatch.setattr(trainer, "evaluate", fake_evaluate)
+    try:
+        validation = trainer._validation()
+        trainer._save_best(validation)
+        assert simulators and set(simulators) == {"abstract"}
+        assert validation["checkpoint_selection_uses_pymunk"] is False
+        assert (target_root / "models" / "best_stage_r_checkpoint.pt").is_file()
+        assert (target_root / "models" / "best_nominal_checkpoint.pt").is_file()
+    finally:
+        trainer.close()
+
+
 def test_recurrent_checkpoint_rng_states_are_normalized_to_cpu_byte_tensors():
     state = torch.get_rng_state()
     if torch.cuda.is_available():
@@ -560,3 +954,172 @@ def test_recurrent_checkpoint_payload_is_loaded_on_cpu(
         assert observed == ["cpu"]
     finally:
         second.close()
+
+
+def test_video_manifest_append_and_deduplicate():
+    first = {
+        "checkpoint": "best.pt",
+        "simulator": "pymunk",
+        "scenario": "phase3_2v2_open",
+        "defender_style": "predictive",
+        "profile": "nominal",
+        "seed": 360001,
+        "recording_mode": "fixed_duration",
+        "terminal": False,
+    }
+    replacement = dict(first)
+    replacement["terminal"] = True
+    second = dict(first)
+    second["seed"] = 360002
+    merged = merge_manifest_records([first], [replacement, second])
+    assert len(merged) == 2
+    assert merged[0]["terminal"] is True
+    assert manifest_record_key(first) == manifest_record_key(replacement)
+    assert manifest_record_key(first) != manifest_record_key(second)
+
+
+def test_partial_and_terminal_video_metrics_and_fixed_style_replay(
+    phase3_config, tmp_path
+):
+    run_dir = tmp_path / "video_run"
+    _trainer_directories(run_dir)
+    config = copy.deepcopy(phase3_config)
+    config["phase3"]["max_episode_steps"] = 200
+    config["phase3"]["minimum_goal_seconds"] = 1000.0
+    config["phase3"]["defender_speed"] = 0.0
+    config["video"]["width"] = 160
+    config["video"]["height"] = 96
+    config["video"]["fps"] = 1
+    trainer = RecurrentMAPPOTrainer(config, run_dir)
+    try:
+        with torch.no_grad():
+            trainer.actor.policy.bias[6] = 10.0
+        trainer.save_checkpoint(run_dir / "models" / "best_nominal_checkpoint.pt")
+    finally:
+        trainer.close()
+    (run_dir / "resolved_config.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+    partial_args = SimpleNamespace(
+        run_dir=str(run_dir),
+        checkpoint="best_nominal",
+        simulator="abstract",
+        scenario="phase3_2v2_open",
+        profile="nominal",
+        defender_style="predictive",
+        episodes=1,
+        seed_base=340000,
+        seed=362000,
+        seed_category="audit",
+        seconds=15.0,
+        until_terminal=False,
+        full_match=False,
+        device="cpu",
+    )
+    partial, manifest = record_phase3_videos(partial_args)
+    assert partial[0]["terminal"] is False
+    assert partial[0]["clip_end_reason"] == "video_time_limit"
+    assert partial[0]["terminal_metrics"] is None
+    assert partial[0]["clip_end_metrics"]["episode_steps"] > 0
+    assert partial[0]["actual_defender_style"] == "predictive"
+
+    config["phase3"]["max_episode_steps"] = 2
+    (run_dir / "resolved_config.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+    terminal_args = copy.copy(partial_args)
+    terminal_args.seed = 362001
+    terminal_args.until_terminal = True
+    terminal, _ = record_phase3_videos(terminal_args)
+    assert terminal[0]["terminal"] is True
+    assert terminal[0]["terminal_metrics"]["terminal_reason"] == "timeout"
+    saved = json.loads(manifest.read_text())
+    assert len(saved) == 2
+    assert {record["seed"] for record in saved} == {362000, 362001}
+
+
+def test_cc_fdr_requires_passing_gate_b_r_and_stage_r_checkpoint(
+    phase3_config, tmp_path
+):
+    stage_d_root = tmp_path / "cc_stage_d"
+    stage_r_root = tmp_path / "cc_stage_r"
+    cc_root = tmp_path / "cc_run"
+    stage_d = stage_d_checkpoint(phase3_config, stage_d_root)
+    _trainer_directories(stage_r_root)
+    stage_r = RecurrentMAPPOTrainer(
+        stage_r_test_config(phase3_config, stage_d_root.name),
+        stage_r_root,
+        warm_start_path=stage_d,
+    )
+    try:
+        stage_r.last_validation = {"nominal": {"success_rate": 0.8}}
+        stage_r_checkpoint = stage_r.save_checkpoint(
+            stage_r_root / "models" / "best_stage_r_checkpoint.pt"
+        )
+    finally:
+        stage_r.close()
+
+    historical_gate = tmp_path / "phase3_gate_b.json"
+    historical_gate.write_text(
+        json.dumps({"gate": "B", "passed": True}), encoding="utf-8"
+    )
+    cc_config = stage_r_test_config(phase3_config)
+    cc_config["phase3"]["mode"] = "cc_fdr"
+    cc_config["phase3"]["active_stage"] = "stage_d"
+    cc_config["phase3"]["cc_fdr"]["authorization_artifact"] = str(
+        historical_gate
+    )
+    _trainer_directories(cc_root)
+    with pytest.raises(ValueError, match="CC-FDR remains unauthorized"):
+        RecurrentMAPPOTrainer(
+            cc_config,
+            cc_root,
+            warm_start_path=stage_r_checkpoint,
+        )
+
+    passing_gate = tmp_path / "phase3_gate_b_r.json"
+    passing_gate.write_text(
+        json.dumps(
+            {
+                "gate": "B-R",
+                "passed": True,
+                "cc_fdr_authorized": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    cc_config["phase3"]["cc_fdr"]["authorization_artifact"] = str(passing_gate)
+    accepted_root = tmp_path / "cc_accepted"
+    _trainer_directories(accepted_root)
+    accepted = RecurrentMAPPOTrainer(
+        cc_config,
+        accepted_root,
+        warm_start_path=stage_r_checkpoint,
+    )
+    try:
+        assert accepted.curriculum is not None
+        assert accepted.current_update == 0
+        assert not accepted.actor_optimizer.state
+    finally:
+        accepted.close()
+
+
+def test_stage_r_seed_ranges_do_not_reuse_historical_protocols():
+    config = load_config("configs/phase3_stage_r.yaml")
+    seeds = config["evaluation"]["seed_bases"]
+    assert seeds["phase3_stage_r_r0_audit"] == 360000
+    assert seeds["phase3_stage_r_validation"] == 365000
+    assert seeds["phase3_gate_b_r"] == 370000
+    assert config["phase3"]["stage_r"]["training_episode_seed_base"] == 1000000000
+    assert len(
+        {
+            310000,
+            330000,
+            340000,
+            350000,
+            seeds["phase3_stage_r_r0_audit"],
+            seeds["phase3_stage_r_validation"],
+            seeds["phase3_gate_b_r"],
+            config["phase3"]["stage_r"]["training_episode_seed_base"],
+        }
+    ) == 8

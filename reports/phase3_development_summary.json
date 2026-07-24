@@ -1,12 +1,13 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "development_seed": 3,
   "decision": {
     "gate_a_passed": true,
     "gate_b_passed": false,
+    "gate_b_r_passed": null,
     "cc_fdr_authorized": false,
     "final_seed_confirmation_authorized": false,
-    "reason": "The frozen Stage-D best-nominal checkpoint scored 0.49 on Pymunk 2v2 open play, below the locked Gate-B minimum of 0.55."
+    "reason": "Historical Gate B remains failed at 0.49 versus the locked 0.55 Pymunk 2v2-open floor. Stage R is implemented but scientifically unrun; CC-FDR remains unauthorized."
   },
   "gate_a": {
     "smoke": false,
@@ -205,7 +206,8 @@
       "episodes": 15,
       "mean_pass_attempts": 3.6,
       "mean_shots": 1.1333333333333333,
-      "mean_collisions": 62.06666666666667
+      "mean_collisions": 62.06666666666667,
+      "collision_counting_semantics": "The existing counter increments once per macro-action decision with attacker overlap, so sustained contact can create repeated counts. Stage R leaves the collision reward coefficient unchanged."
     },
     "videos": {
       "count": 6,
@@ -214,8 +216,42 @@
       "limitations": "All clips are partial and have empty final metrics. Repeated recorder invocations overwrite video_manifest.json, and the sampled clips do not directly cover the predictive and lane-block Gate-B failure mechanisms."
     }
   },
+  "stage_r": {
+    "implementation_status": "ready",
+    "scientific_status": "unrun",
+    "research_question": "Can the existing recurrent MAPPO policy class graduate nominal adversarial football after removing the exploitable reception reward and concentrating learning on lane-block and predictive defenders?",
+    "configuration": "configs/phase3_stage_r.yaml",
+    "historical_warm_start_run_id": "20260723_094519_phase3_recurrent_nominal_mappo_seed3",
+    "historical_warm_start_checkpoint": "best_nominal",
+    "training_steps": 500000,
+    "training_episode_seed_base": 1000000000,
+    "r0_audit": {
+      "status": "unrun",
+      "seed_base": 360000,
+      "matrix": "4 fixed defender styles x 2 scenarios x 2 simulators x 100 episodes"
+    },
+    "abstract_validation": {
+      "status": "unrun",
+      "seed_base": 365000,
+      "checkpoint_selection_uses_pymunk": false
+    },
+    "gate_b_r": {
+      "status": "unrun",
+      "seed_base": 370000,
+      "historical_gate_b_unchanged": true
+    },
+    "cc_fdr_authorized": false,
+    "next_execution_order": [
+      "Restore the frozen Stage-D best nominal checkpoint and run R0.",
+      "Run and save the reward-invariant audit.",
+      "Train exactly one 500000-step Stage-R seed-3 policy.",
+      "Evaluate the held-out abstract validation matrix.",
+      "Run Gate B-R on untouched seeds.",
+      "Record matched terminal videos and update/sync the decision record."
+    ]
+  },
   "immediate_next_work": {
-    "status": "stage_r_nominal_mastery_required",
+    "status": "stage_r_implemented_ready_to_run",
     "section_25_authorized": false,
     "architecture_change_authorized": false,
     "harder_physics_authorized": false,
@@ -247,6 +283,6 @@
       "2v2_open_lane_predictive_mean_min": 0.4,
       "success_minus_failure_return_min": 5.0
     },
-    "authorization_rule": "Only a Gate B-R pass authorizes CC-FDR/Section 25. If abstract safeguards pass but Pymunk fails, add a calibrated abstract dynamics envelope. If both fail, rerun A-D plus R from scratch with the corrected reward schedule."
+    "authorization_rule": "Only a Gate B-R pass authorizes CC-FDR/Section 39. If abstract safeguards pass but Pymunk fails, add a calibrated abstract dynamics envelope. If both fail, rerun A-D plus R from scratch with the corrected reward schedule."
   }
 }

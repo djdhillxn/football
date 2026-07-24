@@ -999,6 +999,22 @@ def run_training(
     try:
         if config.get("phase3", {}).get("enabled", False):
             phase3 = config["phase3"]
+            if phase3.get("active_stage") == "stage_r":
+                summary_path = phase3.get("stage_r", {}).get(
+                    "development_summary",
+                    "reports/phase3_development_summary.json",
+                )
+                summary = json.loads(Path(summary_path).read_text(encoding="utf-8"))
+                decision = summary.get("decision", {})
+                if (
+                    not decision.get("gate_a_passed", False)
+                    or decision.get("gate_b_passed", True)
+                    or decision.get("cc_fdr_authorized", True)
+                ):
+                    raise ValueError(
+                        "Stage R requires historical Gate A pass, Gate B fail, and "
+                        "CC-FDR unauthorized in the development summary"
+                    )
             if phase3.get("require_calibration", False):
                 summary_path = phase3.get("calibration_summary")
                 if not summary_path:

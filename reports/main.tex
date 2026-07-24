@@ -8,6 +8,7 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage{microtype}
 \setlength{\emergencystretch}{2em}
+\hfuzz=2pt
 \title{\vspace{-1.2em}From Robust Skill Selection to Recurrent Robot-Soccer Team Play}
 \author{Research software report}
 \date{23 July 2026}
@@ -47,6 +48,23 @@ fixed evaluation seeds, and auditable artifacts. Pymunk transfer is a sim-to-sim
 physical-robot claim. Full 11-v-11 play, pixel control, and self-play populations are deliberately
 outside the present scope.
 
+The RoboCup-facing north star is a learned high-level football policy integrated above
+perception/localization and walking, turning, dribbling, and kicking primitives:
+\[
+\begin{gathered}
+\text{high-level football policy}\\[-0.2em]
+\downarrow\\[-0.2em]
+\text{perception/localization}\\[-0.2em]
+\downarrow\\[-0.2em]
+\text{motion primitives}\\[-0.2em]
+\downarrow\\[-0.2em]
+\text{robot platform}
+\end{gathered}
+\]
+This deliberate hierarchy tests centralized-training/decentralized-execution decision making,
+partial observability, recurrence, cooperation, and adversarial variation; it does not train
+humanoid joints or imply that success here alone wins RoboCup.
+
 This scope follows the staged approach used by robot-football systems: isolate useful drills and
 high-level coordination before adding full-match complexity \cite{liu2022teamplay,kurach2020football,
 su2025quadruped}. PPO supplies the clipped on-policy objective \cite{schulman2017ppo}, MAPPO supplies
@@ -54,6 +72,11 @@ centralized training with decentralized execution \cite{yu2022mappo}, and domain
 supplies a transfer intervention \cite{tobin2017domain,mehta2020active}. The experimental standard
 is independent training seeds and seed-level uncertainty, not confidence intervals over repeated
 episodes from one actor \cite{agarwal2021precipice}.
+Recent UW--Madison work independently supports this boundary: abstract multi-robot policies can
+transfer through separately obtained perception and motion modules \cite{labiosa2025abstract},
+while learned soccer decisions can be integrated within a classical robotics stack using multiple
+fidelity levels \cite{labiosa2025stack}. We adopt those motivations, not their exact simulator,
+robot, or deployment result.
 
 \section{Phase 1: engineering gate}
 Phase 1 corrected playable-boundary behavior, possession normalization, profile aggregation, and
@@ -226,8 +249,10 @@ long, non-progressing circulation can nearly match the return from scoring; this
 misalignment, not merely an implementation-crash hypothesis. Predictive-defense failures are
 different: they average 11.61 shots, zero on target, 7.39 out-of-bounds events, and return
 $-19.18$. Zonal failures show a third pattern, with 62.1 collision events and little progression.
-An architecture sweep would conflate three behavioral failures that the current network already
-has enough capacity to express.
+The counter increments once per macro-action decision with attacker overlap, not only at contact
+onset, so sustained contact can contribute repeatedly. Stage R therefore leaves the collision
+coefficient unchanged. An architecture sweep would conflate three behavioral failures that the
+current network already has enough capacity to express.
 
 Six synchronized 20-second clips visibly show carrier/support role separation, completed passes,
 and scoring/restarts. This is nontrivial team play, not a trivial direct-shot baseline. The clips
@@ -236,31 +261,35 @@ and the recorder overwrites its manifest on each invocation. They support a beha
 cannot resolve the failed gate or quantify style robustness.
 
 \subsection{Immediate experiment: nominal mastery Stage R}
-The next intervention is one explicit repair stage, not more unchanged Stage-D training. This
+The implemented, scientifically unrun intervention is one explicit repair stage, not more
+unchanged Stage-D training. This
 choice is consistent with evidence that MAPPO can be strong without elaborate architecture
 changes \cite{yu2022mappo}, that curricula should concentrate on levels with current learning
 value \cite{jiang2021plr}, and that shaped rewards can be optimized at the expense of the intended
-outcome \cite{forbes2025shaping}. Before training, the evaluator and recorder will add forced
-defender style, append-only manifests, terminal/full-match capture, and current metrics for partial
-clips. The frozen Stage-D actor will then receive a declared $4$-style $\times$ $2$-scenario
+outcome \cite{forbes2025shaping}. The evaluator and recorder now support forced defender style,
+merged/deduplicated manifests, terminal/full-match capture, seed-specific replay, and current
+metrics for partial clips. The frozen Stage-D actor is assigned a declared $4$-style
+$\times$ $2$-scenario
 $\times$ $2$-backend audit with 100 episodes per cell.
 
-Stage R will warm-start the Stage-D actor and critic but reset optimizer and scheduler state. It
-will train for 500,000 abstract-simulator steps, initially at $10^{-4}$ learning rate with a
+Stage R warm-starts the Stage-D actor, critic, and normalizers while resetting optimizer,
+scheduler, rollout, and Stage-R counters. Its one authorized scientific run is 500,000
+abstract-simulator steps, initially at $10^{-4}$ learning rate with a
 $3\times10^{-5}$ floor. Scenario probabilities will be 0.50 2-v-2 open, 0.20 pass-required,
 0.15 3-v-2 open, and 0.15 3-v-2 press; defender probabilities will be 0.35 lane-block,
-0.35 predictive, 0.20 zonal, and 0.10 press. The unconditional $0.35$ reward per controlled
-reception will be annealed to zero. Forward ball progress, pass-to-goal, and terminal goal rewards
-remain; a backward or repeated circulation earns no new reception credit. Regression tests will
-lock that invariant. Checkpoint selection uses held-out, style-stratified abstract outcomes rather
-than shaped return or Pymunk feedback.
+0.35 predictive, 0.20 zonal, and 0.10 press. Controlled-reception reward is exactly zero from the
+first Stage-R transition. A possession-chain high-water mark pays pass advance only for a newly
+reached forward frontier; backward and A--B--A--B revisits pay zero, while the next new frontier
+pays only its incremental excess. Goal, pass-to-goal, and ordinary potential shaping remain.
+Deterministic machine-readable invariants lock these semantics. Checkpoint selection uses
+held-out, style-stratified abstract football outcomes rather than shaped return or Pymunk feedback.
 
 The repair evaluation uses a new seed base and retains every original Gate-B threshold. It also
 predeclares three safeguards: pass-required success at least $0.55$, 3-v-2 success at least
 $0.70$, and 2-v-2 open worst-style success at least $0.25$ with the lane/predictive mean at least
 $0.40$. For styles containing both outcomes, successful return must exceed failed return by at
 least five. These are Stage-R development safeguards, not a retrospective rewrite of Gate B.
-Only a pass authorizes Section 25 and CC-FDR. If Stage R passes in abstract but fails Pymunk, the
+Only a pass authorizes the renumbered CC-FDR Section 39. If Stage R passes in abstract but fails Pymunk, the
 next intervention is a calibrated abstract dynamics envelope; if it fails both, rerun A--D plus R
 from scratch with the corrected reward schedule. Procedural task variation is retained because
 fixed, easily memorized tasks can overstate closed-loop competence \cite{ellis2023smacv2}.
@@ -284,9 +313,9 @@ ranges; automated gate & profile/grid robustness improves, nominal competence an
 Phase 3 software & implemented & recurrent smoke/resume/export tests; full calibration; staged
 training and fail-closed gate tooling & the protocol is executable and retained failed-gate
 evidence \\
-Phase 3 development & Stage R required & seed-3 Stage A--D logs; 2.01M steps; raw Gate-B rows;
-six partial diagnostic videos & cooperation is real, but reward/style robustness must be repaired
-before CC-FDR \\
+Phase 3 Stage R & implemented, unrun & reward invariants; fixed-style R0/Gate-B-R tooling;
+warm-start and video tests; preserved Stage A--D evidence & cooperation is real, but no Stage-R
+performance claim exists before the Colab run \\
 Phase 3 confirmation & disabled & future new seeds 4, 5, 6 after the protocol freezes & no
 multi-seed recurrent claim \\
 \bottomrule
@@ -325,9 +354,10 @@ architecture or compute advantage.
 \subsection{Failure-contingent next actions}
 If Gate A fails, modify task geometry or scripted behavior and rerun calibration; never alter the
 threshold after seeing a learned policy. Gate A passed. Gate B failed with healthy optimization,
-and the completed audit found reward misalignment plus distinct style-specific failures. Implement
-the predeclared Stage-R reward, curriculum, diagnostics, and safeguards above; do not change the
-network or tune PPO simultaneously. If repaired abstract competence transfers, repeat Gate B-R.
+and the completed forensic analysis found reward misalignment plus distinct style-specific
+failures. The predeclared Stage-R reward, curriculum, diagnostics, and safeguards are now
+implemented but unrun; do not change the network or tune PPO simultaneously. Run R0, save the
+invariant artifact, train exactly one Stage-R job, run abstract validation, and then Gate B-R.
 If abstract competence does not transfer, add a calibrated abstract dynamics envelope before
 robust fine-tuning. If Gate C later improves robustness but violates the floor, treat the
 competence guard as insufficient; increase rehearsal or stop fine-tuning, then rerun seed 3 before
@@ -348,7 +378,8 @@ the calibrated task is nontrivial, recurrent nominal training is stable, and the
 exhibits substantial pass-required cooperation in independent Pymunk physics. However, Phase 3
 development is not complete. Gate B failed one locked competence threshold and exposed severe
 defender-style variation plus a confirmed mismatch between controlled-reception reward and
-scoring. The current decision is \emph{implement and run nominal-mastery Stage R}; unchanged
+scoring. Nominal-mastery Stage R is implemented and smoke-tested but scientifically unrun. The
+current decision is \emph{run the one predeclared Stage-R protocol}; unchanged
 Stage-D extension, CC-FDR, harder simulation, architecture search, and seed-4/5/6 confirmation
 remain disabled. This preserves the end objective---robust transfer without loss of useful
 cooperative football---instead of optimizing a favorable subset of metrics.

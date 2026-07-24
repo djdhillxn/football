@@ -16,8 +16,11 @@ def build_parser():
     parser.add_argument("--device")
     parser.add_argument("--resume")
     parser.add_argument("--warm-start")
-    parser.add_argument("--stage", choices=["stage_a", "stage_b", "stage_c", "stage_d"])
+    parser.add_argument(
+        "--stage", choices=["stage_a", "stage_b", "stage_c", "stage_d", "stage_r"]
+    )
     parser.add_argument("--calibration-summary")
+    parser.add_argument("--authorization-artifact")
     parser.add_argument("overrides", nargs="*", help="YAML-valued section.key=value overrides")
     return parser
 
@@ -40,6 +43,10 @@ def main():
         overrides.append("phase3.active_stage=" + args.stage)
     if args.calibration_summary is not None:
         overrides.append("phase3.calibration_summary=" + args.calibration_summary)
+    if args.authorization_artifact is not None:
+        overrides.append(
+            "phase3.cc_fdr.authorization_artifact=" + args.authorization_artifact
+        )
     config = load_config(args.config, overrides)
     run_training(
         config,

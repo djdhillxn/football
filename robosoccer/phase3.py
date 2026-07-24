@@ -170,6 +170,7 @@ class Phase3SoccerEnv(ParallelEnv):
         self.last_possessor = None
         self.pending_pass = None
         self.pass_chain = []
+        self.chain_progress_high_water = 0.0
         self.cooperative_sequence = False
         self.cooperative_horizon_remaining = 0
         self.termination_reason = None
@@ -312,6 +313,7 @@ class Phase3SoccerEnv(ParallelEnv):
         self._reset_delay_queues()
         self._reset_metrics()
         self._update_possession()
+        self._reset_chain_progress()
         self._last_potential_components = self._potential_components()
         self._last_potential = sum(self._last_potential_components.values())
         observations = self._observations()
@@ -468,6 +470,8 @@ class Phase3SoccerEnv(ParallelEnv):
             "action_switches": 0,
             "possession_chain_max": 0,
             "expected_threat_gain": 0.0,
+            "new_chain_progress": 0.0,
+            "chain_progress_high_water": 0.0,
             "match_restarts": 0,
             "match_score": 0,
             "terminal_reason": None,
@@ -478,6 +482,7 @@ class Phase3SoccerEnv(ParallelEnv):
             "reward_team_possession": 0.0,
             "reward_controlled_pass": 0.0,
             "reward_pass_and_advance": 0.0,
+            "reward_chain_progress": 0.0,
             "reward_pass_and_goal": 0.0,
             "reward_support_quality": 0.0,
             "reward_collision": 0.0,
@@ -488,6 +493,46 @@ class Phase3SoccerEnv(ParallelEnv):
         for action_name in ACTION_NAMES:
             self.metrics["requested_" + action_name] = 0
             self.metrics["masked_" + action_name] = 0
+
+    def _uses_chain_frontier_reward(self):
+        return int(self.phase3_config.get("reward_schema_version", 1)) >= 2
+
+    def _chain_progress_value(self):
+        return float(self.ball["position"][0]) / float(self.env_config["field_length"])
+
+    def _reset_chain_progress(self):
+        self.chain_progress_high_water = self._chain_progress_value()
+        if self.metrics:
+            self.metrics["chain_progress_high_water"] = self.chain_progress_high_water
+
+    def _track_controlled_chain_progress(self):
+        if not self._uses_chain_frontier_reward():
+            return
+        current = self._chain_progress_value()
+        self.chain_progress_high_water = max(self.chain_progress_high_water, current)
+        self.metrics["chain_progress_high_water"] = max(
+            self.metrics["chain_progress_high_water"],
+            self.chain_progress_high_water,
+        )
+
+    def _claim_new_chain_progress(self):
+        current = self._chain_progress_value()
+        new_progress = max(0.0, current - self.chain_progress_high_water)
+        self.chain_progress_high_water = max(self.chain_progress_high_water, current)
+        self.metrics["new_chain_progress"] += new_progress
+        self.metrics["chain_progress_high_water"] = max(
+            self.metrics["chain_progress_high_water"],
+            self.chain_progress_high_water,
+        )
+        return new_progress
+
+    def _reset_attacking_chain(self):
+        self.pass_chain = []
+        self.pending_pass = None
+        self.cooperative_sequence = False
+        self.cooperative_horizon_remaining = 0
+        self.last_possessor = None
+        self._reset_chain_progress()
 
     def _reset_delay_queues(self):
         observation_latency = int(
@@ -948,6 +993,7 @@ class Phase3SoccerEnv(ParallelEnv):
                 )
                 self.ball["position"] = self.players[carrier]["position"] + 0.36 * direction
                 self.ball["velocity"] = self.players[carrier]["velocity"].copy()
+                self._track_controlled_chain_progress()
                 return
             self.ball["possession"] = None
         if np.linalg.norm(self.ball["velocity"]) > float(self.phase3_config.get("capture_speed", 3.0)):
@@ -978,7 +1024,16 @@ class Phase3SoccerEnv(ParallelEnv):
                 advance = float(
                     self.players[carrier]["position"][0] - self.pending_pass["start_x"]
                 )
-                threat_gain = max(0.0, advance) / float(self.env_config["field_length"])
+                if self._uses_chain_frontier_reward():
+                    threat_gain = self._claim_new_chain_progress()
+                    credited_advance = threat_gain * float(
+                        self.env_config["field_length"]
+                    )
+                else:
+                    threat_gain = max(0.0, advance) / float(
+                        self.env_config["field_length"]
+                    )
+                    credited_advance = advance
                 self.metrics["expected_threat_gain"] += threat_gain
                 self.pass_chain.append((self.pending_pass["passer"], carrier))
                 self.metrics["possession_chain_max"] = max(
@@ -988,9 +1043,9 @@ class Phase3SoccerEnv(ParallelEnv):
                     self.phase3_config.get("minimum_reception_advance", 0.20)
                 )
                 self.cooperative_sequence = (
-                    self.cooperative_sequence or advance >= minimum_advance
+                    self.cooperative_sequence or credited_advance >= minimum_advance
                 )
-                if advance >= minimum_advance:
+                if credited_advance >= minimum_advance:
                     self.metrics["pass_and_advance"] += 1
                     self.cooperative_horizon_remaining = int(
                         self.phase3_config.get("cooperative_horizon_steps", 24)
@@ -1027,6 +1082,7 @@ class Phase3SoccerEnv(ParallelEnv):
                     if self.pending_pass is not None:
                         self.metrics["interceptions"] += 1
                         self.pending_pass = None
+                    self._reset_attacking_chain()
                     if self.ball_body is not None:
                         self.ball_body.velocity = tuple(self.ball["velocity"])
                     return
@@ -1062,6 +1118,7 @@ class Phase3SoccerEnv(ParallelEnv):
                     if self.pending_pass is not None:
                         self.metrics["interceptions"] += 1
                         self.pending_pass = None
+                    self._reset_attacking_chain()
                 if self.ball_body is not None:
                     self.ball_body.velocity = tuple(self.ball["velocity"])
                 break
@@ -1137,6 +1194,7 @@ class Phase3SoccerEnv(ParallelEnv):
         }
         self._reset_delay_queues()
         self._update_possession()
+        self._reset_chain_progress()
         self._last_potential_components = self._potential_components()
         self._last_potential = sum(self._last_potential_components.values())
         self.match_score = score
@@ -1359,6 +1417,7 @@ class Phase3SoccerEnv(ParallelEnv):
         self.metrics["reward_support_quality"] += support_reward
         self.metrics["reward_controlled_pass"] += controlled_reward
         self.metrics["reward_pass_and_advance"] += pass_advance_reward
+        self.metrics["reward_chain_progress"] += pass_advance_reward
         self.metrics["reward_turnover"] += turnover_reward
         self.metrics["reward_collision"] += collision_reward
         self.metrics["reward_time"] += time_reward
@@ -1471,6 +1530,14 @@ class Phase3SoccerEnv(ParallelEnv):
         result["mean_sequence_steps"] = result["sequence_steps_sum"] / max(
             1, result["completed_sequences"]
         )
+        result["collision_counting_semantics"] = (
+            "macro_action_decisions_with_attacker_overlap"
+        )
+        return result
+
+    def metrics_snapshot(self):
+        result = self._final_metrics()
+        result["terminal_reason"] = self.termination_reason
         return result
 
     def _info(self, agent):
@@ -1663,6 +1730,180 @@ def make_phase3_environment(config, simulator="abstract", **kwargs):
     return Phase3SoccerEnv(config, simulator=simulator, **kwargs)
 
 
+def run_stage_r_reward_invariants(config):
+    """Exercise Stage-R reward semantics and return a machine-readable result."""
+    if int(config.get("phase3", {}).get("reward_schema_version", 1)) != 2:
+        raise ValueError("Stage-R reward invariants require reward schema version 2")
+    if float(config["phase3_reward"].get("controlled_reception", -1.0)) != 0.0:
+        raise ValueError("Stage-R controlled-reception reward must be zero")
+    test_config = copy.deepcopy(config)
+    test_config["phase3"]["match_mode"] = False
+    test_config["phase3"]["minimum_goal_seconds"] = 0.0
+    env = make_phase3_environment(
+        test_config,
+        simulator="abstract",
+        scenario="phase3_2v2_pass_required",
+        defender_style="lane_block",
+    )
+
+    def receive(passer, receiver, receiver_x):
+        env.ball["possession"] = None
+        env.last_possessor = passer
+        env.players[receiver]["position"][0] = receiver_x
+        env.ball["position"] = env.players[receiver]["position"].copy()
+        env.ball["velocity"] = np.zeros(2)
+        env.pending_pass = {
+            "passer": passer,
+            "receiver": receiver,
+            "start_x": float(env.players[passer]["position"][0]),
+            "valid": True,
+            "steps": 1,
+        }
+        env._event_rewards = {}
+        before_receptions = env.metrics["completed_receptions"]
+        before_progress = env.metrics["new_chain_progress"]
+        env._update_possession()
+        return {
+            "reception_increment": (
+                env.metrics["completed_receptions"] - before_receptions
+            ),
+            "new_progress": env.metrics["new_chain_progress"] - before_progress,
+            "controlled_reception_event": env._event_rewards.get(
+                "controlled_reception", 0.0
+            ),
+            "pass_advance_event": env._event_rewards.get("pass_advance", 0.0),
+        }
+
+    try:
+        env.reset(seed=390000)
+        first, second = env.active_agents
+        start_x = float(env.players[first]["position"][0])
+        env.chain_progress_high_water = start_x / float(
+            env.env_config["field_length"]
+        )
+        env.metrics["chain_progress_high_water"] = env.chain_progress_high_water
+        forward_x = start_x + 0.60
+        forward = receive(first, second, forward_x)
+        backward = receive(second, first, start_x + 0.10)
+        revisit = receive(first, second, forward_x)
+        farther_x = forward_x + 0.40
+        new_frontier = receive(first, second, farther_x)
+        progress_before_turnover = env.chain_progress_high_water
+        env.ball["position"][0] = start_x - 0.20
+        env._reset_attacking_chain()
+        turnover_reset = (
+            env.chain_progress_high_water < progress_before_turnover
+            and env.pending_pass is None
+            and not env.cooperative_sequence
+        )
+        env._restart_match()
+        restart_reset = (
+            abs(env.chain_progress_high_water - env._chain_progress_value()) < 1e-12
+        )
+        checks = {
+            "controlled_reception_reward_zero": {
+                "observed": float(config["phase3_reward"]["controlled_reception"])
+                * forward["controlled_reception_event"],
+                "passed": (
+                    float(config["phase3_reward"]["controlled_reception"])
+                    * forward["controlled_reception_event"]
+                    == 0.0
+                ),
+            },
+            "first_forward_frontier_positive": {
+                "observed": forward["new_progress"],
+                "passed": forward["new_progress"] > 0.0
+                and forward["pass_advance_event"] > 0.0,
+            },
+            "backward_reception_no_progress": {
+                "observed": backward["new_progress"],
+                "passed": backward["reception_increment"] == 1
+                and backward["new_progress"] == 0.0,
+            },
+            "aba_no_repeated_progress": {
+                "observed": backward["new_progress"],
+                "passed": backward["new_progress"] == 0.0,
+            },
+            "revisited_frontier_no_progress": {
+                "observed": revisit["new_progress"],
+                "passed": revisit["new_progress"] == 0.0,
+            },
+            "new_frontier_incremental_only": {
+                "observed": new_frontier["new_progress"],
+                "expected": 0.40 / float(env.env_config["field_length"]),
+                "passed": abs(
+                    new_frontier["new_progress"]
+                    - 0.40 / float(env.env_config["field_length"])
+                )
+                < 1e-9,
+            },
+            "turnover_resets_chain": {
+                "observed": turnover_reset,
+                "passed": turnover_reset,
+            },
+            "restart_resets_chain": {
+                "observed": restart_reset,
+                "passed": restart_reset,
+            },
+            "pass_without_goal_has_no_pass_to_goal": {
+                "observed": env.metrics["pass_to_goal"],
+                "passed": env.metrics["pass_to_goal"] == 0,
+            },
+            "circulation_reward_does_not_scale": {
+                "observed": (
+                    forward["new_progress"]
+                    + backward["new_progress"]
+                    + revisit["new_progress"]
+                ),
+                "expected": forward["new_progress"],
+                "passed": (
+                    forward["new_progress"]
+                    + backward["new_progress"]
+                    + revisit["new_progress"]
+                    == forward["new_progress"]
+                ),
+            },
+        }
+    finally:
+        env.close()
+
+    goal_env = make_phase3_environment(
+        test_config,
+        simulator="abstract",
+        scenario="phase3_2v2_pass_required",
+        defender_style="lane_block",
+    )
+    try:
+        goal_env.reset(seed=390001)
+        goal_env.cooperative_sequence = True
+        goal_env.cooperative_horizon_remaining = 10
+        goal_env.ball["possession"] = None
+        goal_env.ball["shot_in_flight"] = True
+        goal_env.ball["cooperative_shot"] = True
+        goal_env.ball["position"] = np.array(
+            [test_config["environment"]["field_length"] / 2 + 0.01, 0.0]
+        )
+        for defender in goal_env.defenders.values():
+            defender["position"] = np.array([-4.0, 2.5])
+        _, _, _, _, infos = goal_env.step(
+            {agent: 6 for agent in goal_env.active_agents}
+        )
+        metrics = next(iter(infos.values()))["episode_metrics"]
+        checks["pass_to_goal_fires_once"] = {
+            "observed": metrics["pass_to_goal"],
+            "passed": metrics["pass_to_goal"] == 1
+            and metrics["reward_pass_and_goal"]
+            == float(test_config["phase3_reward"]["pass_to_goal"]),
+        }
+    finally:
+        goal_env.close()
+    return {
+        "schema_version": 1,
+        "reward_schema_version": 2,
+        "scientific_status": "deterministic_invariant_check",
+        "checks": checks,
+        "passed": all(check["passed"] for check in checks.values()),
+    }
 def phase3_baseline_actions(env, method, memory=None):
     """Return legal actions for calibration baselines without using privileged state."""
     memory = memory if memory is not None else {}
