@@ -215,10 +215,55 @@ cooperation, but Gate B is conjunctive. It did not pass.
 The aggregate hides a serious style gap. In 2-v-2 open play, success was $1.00$ against press,
 $0.483$ against zonal, $0.333$ against lane-block, and $0.053$ against predictive defense.
 Lane-block episodes averaged 93.1 pass attempts and a high shaped return despite only $0.333$
-success. That pattern does not prove a correctness bug, but it is consistent with cyclic pass
-reward harvesting and shows that return or pass completion cannot stand in for scoring. The next
-action is a frozen-policy event/video audit and targeted diagnostic evaluation, not CC-FDR,
-harder physics, final seeds, threshold relaxation, or an automatic full retraining.
+success.
+
+\subsection{Post-sync forensic audit}
+The raw episode rows make the lane-block failure more specific. The 18 failed lane-block matches
+averaged 106.5 pass attempts, 105.8 receptions, 0.56 shots, zero shots on target, and return
+$35.82$. The nine successes averaged 66.4 passes, 64.2 receptions, 5.33 shots, and return $37.34$.
+Controlled-reception reward alone contributed about $37.0$ in the typical failed match. Thus a
+long, non-progressing circulation can nearly match the return from scoring; this is objective
+misalignment, not merely an implementation-crash hypothesis. Predictive-defense failures are
+different: they average 11.61 shots, zero on target, 7.39 out-of-bounds events, and return
+$-19.18$. Zonal failures show a third pattern, with 62.1 collision events and little progression.
+An architecture sweep would conflate three behavioral failures that the current network already
+has enough capacity to express.
+
+Six synchronized 20-second clips visibly show carrier/support role separation, completed passes,
+and scoring/restarts. This is nontrivial team play, not a trivial direct-shot baseline. The clips
+are nevertheless partial: they stop before the 50-second match terminal, contain no final metrics,
+and the recorder overwrites its manifest on each invocation. They support a behavior claim, but
+cannot resolve the failed gate or quantify style robustness.
+
+\subsection{Immediate experiment: nominal mastery Stage R}
+The next intervention is one explicit repair stage, not more unchanged Stage-D training. This
+choice is consistent with evidence that MAPPO can be strong without elaborate architecture
+changes \cite{yu2022mappo}, that curricula should concentrate on levels with current learning
+value \cite{jiang2021plr}, and that shaped rewards can be optimized at the expense of the intended
+outcome \cite{forbes2025shaping}. Before training, the evaluator and recorder will add forced
+defender style, append-only manifests, terminal/full-match capture, and current metrics for partial
+clips. The frozen Stage-D actor will then receive a declared $4$-style $\times$ $2$-scenario
+$\times$ $2$-backend audit with 100 episodes per cell.
+
+Stage R will warm-start the Stage-D actor and critic but reset optimizer and scheduler state. It
+will train for 500,000 abstract-simulator steps, initially at $10^{-4}$ learning rate with a
+$3\times10^{-5}$ floor. Scenario probabilities will be 0.50 2-v-2 open, 0.20 pass-required,
+0.15 3-v-2 open, and 0.15 3-v-2 press; defender probabilities will be 0.35 lane-block,
+0.35 predictive, 0.20 zonal, and 0.10 press. The unconditional $0.35$ reward per controlled
+reception will be annealed to zero. Forward ball progress, pass-to-goal, and terminal goal rewards
+remain; a backward or repeated circulation earns no new reception credit. Regression tests will
+lock that invariant. Checkpoint selection uses held-out, style-stratified abstract outcomes rather
+than shaped return or Pymunk feedback.
+
+The repair evaluation uses a new seed base and retains every original Gate-B threshold. It also
+predeclares three safeguards: pass-required success at least $0.55$, 3-v-2 success at least
+$0.70$, and 2-v-2 open worst-style success at least $0.25$ with the lane/predictive mean at least
+$0.40$. For styles containing both outcomes, successful return must exceed failed return by at
+least five. These are Stage-R development safeguards, not a retrospective rewrite of Gate B.
+Only a pass authorizes Section 25 and CC-FDR. If Stage R passes in abstract but fails Pymunk, the
+next intervention is a calibrated abstract dynamics envelope; if it fails both, rerun A--D plus R
+from scratch with the corrected reward schedule. Procedural task variation is retained because
+fixed, easily memorized tasks can overstate closed-loop competence \cite{ellis2023smacv2}.
 
 \section{Experiment ledger and evidence boundary}
 Table~\ref{tab:ledger} separates completed evidence from executable but unrun work. This is
@@ -239,9 +284,9 @@ ranges; automated gate & profile/grid robustness improves, nominal competence an
 Phase 3 software & implemented & recurrent smoke/resume/export tests; full calibration; staged
 training and fail-closed gate tooling & the protocol is executable and retained failed-gate
 evidence \\
-Phase 3 development & stopped at Gate B & seed-3 Stage A--D logs; 2.01M steps; three
-100-episode Pymunk cells; five locked checks & cooperation is promising, but nominal transfer is
-not yet competent enough for CC-FDR \\
+Phase 3 development & Stage R required & seed-3 Stage A--D logs; 2.01M steps; raw Gate-B rows;
+six partial diagnostic videos & cooperation is real, but reward/style robustness must be repaired
+before CC-FDR \\
 Phase 3 confirmation & disabled & future new seeds 4, 5, 6 after the protocol freezes & no
 multi-seed recurrent claim \\
 \bottomrule
@@ -280,10 +325,11 @@ architecture or compute advantage.
 \subsection{Failure-contingent next actions}
 If Gate A fails, modify task geometry or scripted behavior and rerun calibration; never alter the
 threshold after seeing a learned policy. Gate A passed. Gate B failed with healthy optimization,
-so inspect predictive-defense failures, lane-block pass cycles, reception events, possession
-chains, and matched videos before adding compute. If a correctness defect is found, invalidate and
-rerun the affected nominal stages; otherwise make one predeclared seed-3 intervention aimed at
-2-v-2 transfer competence and repeat Gate B. If Gate C improves robustness but violates the floor, treat the
+and the completed audit found reward misalignment plus distinct style-specific failures. Implement
+the predeclared Stage-R reward, curriculum, diagnostics, and safeguards above; do not change the
+network or tune PPO simultaneously. If repaired abstract competence transfers, repeat Gate B-R.
+If abstract competence does not transfer, add a calibrated abstract dynamics envelope before
+robust fine-tuning. If Gate C later improves robustness but violates the floor, treat the
 competence guard as insufficient; increase rehearsal or stop fine-tuning, then rerun seed 3 before
 any final seed. If all gates pass, freeze code/config hashes before seeds 4--6.
 
@@ -301,10 +347,11 @@ The project is advancing toward the stated objective rather than merely accumula
 the calibrated task is nontrivial, recurrent nominal training is stable, and the policy now
 exhibits substantial pass-required cooperation in independent Pymunk physics. However, Phase 3
 development is not complete. Gate B failed one locked competence threshold and exposed severe
-defender-style variation plus a possible pass-churning incentive. The current decision is
-\emph{diagnose and repair seed 3}; CC-FDR, harder simulation, and seed-4/5/6 confirmation remain
-disabled. This preserves the end objective---robust transfer without loss of useful cooperative
-football---instead of optimizing a favorable subset of metrics.
+defender-style variation plus a confirmed mismatch between controlled-reception reward and
+scoring. The current decision is \emph{implement and run nominal-mastery Stage R}; unchanged
+Stage-D extension, CC-FDR, harder simulation, architecture search, and seed-4/5/6 confirmation
+remain disabled. This preserves the end objective---robust transfer without loss of useful
+cooperative football---instead of optimizing a favorable subset of metrics.
 
 \bibliographystyle{plain}
 \IfFileExists{reports/references.bib}

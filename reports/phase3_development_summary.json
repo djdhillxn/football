@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "development_seed": 3,
   "decision": {
     "gate_a_passed": true,
@@ -169,9 +169,84 @@
     "interpretation": "Optimization was numerically healthy. Gate B exposes a transfer and defender-style robustness failure, not a crashed or obviously divergent PPO run."
   },
   "evidence_boundary": {
-    "full_gate_b_rows": "Embedded in the executed Section-22 output of notebooks/phase3_adversarial_teamplay.ipynb. The first notebook version asserted before Drive sync, so the lightweight Mac archive lacks phase3_gate_b.json until Section 22 is rerun.",
+    "full_gate_b_rows": "runs/20260723_094519_phase3_recurrent_nominal_mappo_seed3/eval/phase3_gate_b.json",
     "full_gate_a_rows": "The executed Section-12 notebook output records the full 100-episode-per-cell summary. The local runs/phase3_calibration directory is an older 20-episode smoke artifact and must not be substituted for the full gate.",
     "raw_stage_logs": "runs/20260723_{070824,083425,091712,094519}_phase3_recurrent_nominal_mappo_seed3/logs/",
-    "throughput_artifact": "runs/phase3_throughput.json"
+    "throughput_artifact": "runs/phase3_throughput.json",
+    "diagnostic_videos": "runs/20260723_094519_phase3_recurrent_nominal_mappo_seed3/videos/phase3/"
+  },
+  "post_sync_forensic_audit": {
+    "interpretation": "The learned behavior is non-trivial, but the frozen actor is not gate-ready. Lane-block failures expose reward-objective misalignment, predictive failures expose finishing/out-of-bounds weakness, and zonal failures expose collision/progression weakness. There is no evidence that architecture capacity or PPO numerical stability is the immediate bottleneck.",
+    "lane_block_failures": {
+      "episodes": 18,
+      "mean_pass_attempts": 106.5,
+      "mean_receptions": 105.83333333333333,
+      "mean_shots": 0.5555555555555556,
+      "mean_shots_on_target": 0.0,
+      "mean_controlled_reception_reward": 37.041666666666664,
+      "mean_team_return": 35.81691528213654
+    },
+    "lane_block_successes": {
+      "episodes": 9,
+      "mean_pass_attempts": 66.44444444444444,
+      "mean_receptions": 64.22222222222223,
+      "mean_shots": 5.333333333333333,
+      "mean_shots_on_target": 1.8888888888888888,
+      "mean_team_return": 37.335061560233146
+    },
+    "predictive_failures": {
+      "episodes": 18,
+      "mean_shots": 11.61111111111111,
+      "mean_shots_on_target": 0.0,
+      "mean_out_of_bounds": 7.388888888888889,
+      "mean_team_return": -19.184421881242417
+    },
+    "zonal_failures": {
+      "episodes": 15,
+      "mean_pass_attempts": 3.6,
+      "mean_shots": 1.1333333333333333,
+      "mean_collisions": 62.06666666666667
+    },
+    "videos": {
+      "count": 6,
+      "duration_seconds_each": 20,
+      "behavior_seen": "Carrier/support separation, completed passes, scoring, and restarts.",
+      "limitations": "All clips are partial and have empty final metrics. Repeated recorder invocations overwrite video_manifest.json, and the sampled clips do not directly cover the predictive and lane-block Gate-B failure mechanisms."
+    }
+  },
+  "immediate_next_work": {
+    "status": "stage_r_nominal_mastery_required",
+    "section_25_authorized": false,
+    "architecture_change_authorized": false,
+    "harder_physics_authorized": false,
+    "direct_pymunk_training_authorized": false,
+    "warm_start_run_id": "20260723_094519_phase3_recurrent_nominal_mappo_seed3",
+    "warm_start_checkpoint": "best_nominal",
+    "training_steps": 500000,
+    "learning_rate_start": 0.0001,
+    "learning_rate_floor": 0.00003,
+    "scenario_mix": {
+      "phase3_2v2_open": 0.5,
+      "phase3_2v2_pass_required": 0.2,
+      "phase3_3v2_open": 0.15,
+      "phase3_3v2_press": 0.15
+    },
+    "defender_style_mix": {
+      "lane_block": 0.35,
+      "predictive": 0.35,
+      "zonal": 0.2,
+      "press": 0.1
+    },
+    "reward_change": "Set controlled-reception reward to zero during mastery; retain forward-progress, pass-to-goal, and goal signals; award no new progress for repeated or backward circulation.",
+    "pretraining_audit": "100 episodes for each of 4 defender styles x 2 scenarios x 2 backends, with raw rows and fixed-style full-match videos.",
+    "gate_b_r_safeguards": {
+      "preserve_original_gate_b_checks": true,
+      "pass_required_cooperation_min": 0.55,
+      "3v2_open_success_min": 0.7,
+      "2v2_open_worst_style_success_min": 0.25,
+      "2v2_open_lane_predictive_mean_min": 0.4,
+      "success_minus_failure_return_min": 5.0
+    },
+    "authorization_rule": "Only a Gate B-R pass authorizes CC-FDR/Section 25. If abstract safeguards pass but Pymunk fails, add a calibrated abstract dynamics envelope. If both fail, rerun A-D plus R from scratch with the corrected reward schedule."
   }
 }
